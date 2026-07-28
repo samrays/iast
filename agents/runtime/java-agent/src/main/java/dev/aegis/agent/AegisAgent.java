@@ -93,29 +93,8 @@ public final class AegisAgent {
      */
     static void bootstrapRuntime(AgentConfig config) throws ReflectiveOperationException {
         Class<?> runtimeClass = Class.forName("dev.aegis.agent.AgentRuntime", true, null);
-        Method bootstrap =
-                runtimeClass.getMethod(
-                        "bootstrap",
-                        String[].class,
-                        String.class,
-                        int.class,
-                        String[].class,
-                        int.class,
-                        double.class,
-                        String.class,
-                        String.class,
-                        long.class);
-        bootstrap.invoke(
-                null,
-                config.redactKeys().toArray(new String[0]),
-                config.captureMode().name(),
-                config.maxValueLength(),
-                config.applicationPackages().toArray(new String[0]),
-                config.bufferCapacity(),
-                config.cpuBudgetPct(),
-                config.endpoint(),
-                config.apiKey(),
-                1_000L);
+        Method bootstrap = runtimeClass.getMethod("bootstrap", java.util.Map.class);
+        bootstrap.invoke(null, config.toMap());
     }
 
     /**

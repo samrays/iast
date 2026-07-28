@@ -75,50 +75,100 @@ public final class AgentRuntime {
     /**
      * Bootstrap entry point, invoked reflectively by {@code AegisAgent}.
      *
-     * <p>Every parameter is a JDK type on purpose. This class lives on the bootstrap class
-     * path and {@code AegisAgent} lives on the system path; if the signature named an agent
-     * type such as {@code AgentConfig}, the two loaders would each define their own copy and
-     * the call would fail to link. Passing only {@code String}, {@code int} and
-     * {@code double} keeps the boundary clean.
+     * <p>The parameter is a plain {@code Map<String, String>} on purpose. This class lives on
+     * the bootstrap class path and {@code AegisAgent} lives on the system path; if the
+     * signature named an agent type such as {@code AgentConfig}, the two loaders would each
+     * define their own copy and the call would fail to link. Only types both loaders resolve
+     * identically may cross — in practice, {@code java.base}. A map also keeps the boundary
+     * stable, so adding a setting no longer means editing a reflected method signature in two
+     * places and discovering the mismatch at runtime in a customer's process.
      */
-    public static void bootstrap(
-            String[] redactKeys,
-            String captureMode,
-            int maxValueLength,
-            String[] applicationPackages,
-            int bufferCapacity,
-            double cpuBudgetPct,
-            String endpoint,
-            String credential,
-            long flushIntervalMillis) {
-
+    public static void bootstrap(java.util.Map<String, String> settings) {
         Redactor.CaptureMode mode;
         try {
-            mode = Redactor.CaptureMode.valueOf(captureMode);
+            mode = Redactor.CaptureMode.valueOf(setting(settings, "capture", "NONE"));
         } catch (RuntimeException e) {
             // An unrecognised mode falls back to the safest option, never the most permissive.
             mode = Redactor.CaptureMode.NONE;
         }
 
         Redactor redactor =
-                new Redactor(java.util.Set.of(redactKeys), mode, maxValueLength, false);
+                new Redactor(
+                        splitToSet(setting(settings, "redact_keys", "")),
+                        mode,
+                        (int) number(settings, "max_value_length", 512),
+                        false);
         AgentRuntime runtime =
                 new AgentRuntime(
                         redactor,
-                        java.util.Set.of(applicationPackages),
-                        bufferCapacity,
-                        cpuBudgetPct);
+                        splitToSet(setting(settings, "packages", "")),
+                        (int) number(settings, "buffer_capacity", 4096),
+                        number(settings, "cpu_budget_pct", 5.0));
         install(runtime);
         warmClasses();
 
         dev.aegis.agent.report.Transport transport =
-                dev.aegis.agent.report.Transport.forEndpoint(endpoint, credential);
+                dev.aegis.agent.report.Transport.forEndpoint(
+                        setting(settings, "endpoint", ""),
+                        setting(settings, "api_key", ""),
+                        setting(settings, "pins", ""));
+
         dev.aegis.agent.report.ReportingThread reporting =
                 new dev.aegis.agent.report.ReportingThread(
-                        runtime.reporter, transport, flushIntervalMillis);
+                        runtime.reporter,
+                        transport,
+                        1_000L,
+                        buildSpool(
+                                setting(settings, "spool_dir", ""),
+                                (long) number(settings, "spool_max_bytes", 64L * 1024 * 1024)));
         reporting.start();
         // Flush on the way out, so the last request's findings are not lost at shutdown.
         Runtime.getRuntime().addShutdownHook(new Thread(reporting::flushOnce, "aegis-flush"));
+    }
+
+    /**
+     * Build the offline spool, or return null when the deployment has not asked for one.
+     *
+     * <p>Opt-in rather than on by default: writing to disk inside someone else's container is
+     * a decision for the operator, not for us. Read-only root filesystems are common and
+     * correct, and an agent that assumed otherwise would fail loudly in exactly the
+     * environments run by the people who care most.
+     */
+    private static dev.aegis.agent.report.Spool buildSpool(String directory, long maxBytes) {
+        if (directory == null || directory.isBlank()) {
+            return null;
+        }
+        try {
+            return new dev.aegis.agent.report.Spool(java.nio.file.Path.of(directory), maxBytes);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static String setting(
+            java.util.Map<String, String> settings, String key, String fallback) {
+        String value = settings == null ? null : settings.get(key);
+        return value == null || value.isEmpty() ? fallback : value;
+    }
+
+    private static double number(
+            java.util.Map<String, String> settings, String key, double fallback) {
+        try {
+            return Double.parseDouble(setting(settings, key, Double.toString(fallback)));
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    private static java.util.Set<String> splitToSet(String value) {
+        java.util.Set<String> items = new java.util.LinkedHashSet<>();
+        for (String entry : value.split("[,;]")) {
+            String trimmed = entry.trim();
+            if (!trimmed.isEmpty()) {
+                items.add(trimmed);
+            }
+        }
+        return items;
     }
 
     /**

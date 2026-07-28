@@ -8,7 +8,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.List;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLSocketFactory;
 
 /**
  * Ships batches of events off the process.
@@ -19,12 +22,27 @@ import java.util.List;
 public interface Transport {
 
     /**
-     * Send a batch.
+     * Send already-serialized NDJSON lines.
+     *
+     * <p>Lines rather than events, because the offline spool replays text it read back from
+     * disk and must go through exactly the same path as a live batch.
      *
      * @return true when the batch was accepted, so the caller can advance its spool cursor.
      *     False means "keep it and retry"; it must not throw.
      */
-    boolean send(List<RuntimeEvent> batch);
+    boolean sendLines(List<String> jsonLines);
+
+    /** Serialize and send. */
+    default boolean send(List<RuntimeEvent> batch) {
+        if (batch.isEmpty()) {
+            return true;
+        }
+        List<String> lines = new ArrayList<>(batch.size());
+        for (RuntimeEvent event : batch) {
+            lines.add(event.toJson());
+        }
+        return sendLines(lines);
+    }
 
     /**
      * NDJSON over HTTP — the fallback transport from ADR-0005, and the default here.
@@ -44,26 +62,53 @@ public interface Transport {
 
         private final String endpoint;
         private final String credential;
+        private final SSLSocketFactory pinnedFactory;
+        private final boolean pinningRequired;
 
         public Http(String endpoint, String credential) {
+            this(endpoint, credential, CertificatePinner.parse(null));
+        }
+
+        public Http(String endpoint, String credential, CertificatePinner pinner) {
             this.endpoint = endpoint.replaceAll("/$", "") + "/ingest/v1/events";
             this.credential = credential == null ? "" : credential;
+            this.pinningRequired = pinner != null && pinner.isEnabled();
+            this.pinnedFactory = pinner == null ? null : pinner.socketFactory();
+        }
+
+        /** True when pins were configured but the pinned TLS context could not be built. */
+        public boolean isMisconfigured() {
+            return pinningRequired && pinnedFactory == null;
         }
 
         @Override
-        public boolean send(List<RuntimeEvent> batch) {
-            if (batch.isEmpty()) {
+        public boolean sendLines(List<String> jsonLines) {
+            if (jsonLines.isEmpty()) {
                 return true;
+            }
+            if (isMisconfigured()) {
+                // Pins were requested and could not be enforced. Sending anyway would quietly
+                // downgrade to ordinary TLS — the exact outcome pinning exists to prevent.
+                return false;
             }
             HttpURLConnection connection = null;
             try {
-                StringBuilder body = new StringBuilder(batch.size() * 512);
-                for (RuntimeEvent event : batch) {
-                    body.append(event.toJson()).append('\n');
+                StringBuilder body = new StringBuilder(jsonLines.size() * 512);
+                for (String line : jsonLines) {
+                    body.append(line).append('\n');
                 }
                 byte[] payload = body.toString().getBytes(StandardCharsets.UTF_8);
 
                 connection = (HttpURLConnection) new URL(endpoint).openConnection();
+                if (connection instanceof HttpsURLConnection secure && pinnedFactory != null) {
+                    // Set on the connection, so the pin is checked during the handshake —
+                    // before a single byte of customer data is written. Inspecting the chain
+                    // after the response would be far too late.
+                    secure.setSSLSocketFactory(pinnedFactory);
+                } else if (pinningRequired) {
+                    // Pinned agent pointed at a plaintext endpoint: refuse rather than send.
+                    return false;
+                }
                 connection.setRequestMethod("POST");
                 connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
                 connection.setReadTimeout(READ_TIMEOUT_MS);
@@ -80,6 +125,14 @@ public interface Transport {
                 int status = connection.getResponseCode();
                 // Drain the body so the connection can be pooled rather than torn down.
                 drainQuietly(connection);
+
+                if (status == 400 || status == 401 || status == 403 || status == 413) {
+                    // A rejection the agent cannot fix by waiting: a malformed batch, an
+                    // expired credential, an oversized payload. Retrying forever would spool
+                    // the same doomed bytes until the ceiling evicted real findings, so this
+                    // counts as delivered and is dropped.
+                    return true;
+                }
                 return status / 100 == 2;
             } catch (Exception e) {
                 // The control plane being unreachable is not the application's problem. The
@@ -125,13 +178,13 @@ public interface Transport {
         }
 
         @Override
-        public boolean send(List<RuntimeEvent> batch) {
-            if (batch.isEmpty()) {
+        public boolean sendLines(List<String> jsonLines) {
+            if (jsonLines.isEmpty()) {
                 return true;
             }
-            StringBuilder body = new StringBuilder(batch.size() * 512);
-            for (RuntimeEvent event : batch) {
-                body.append(event.toJson()).append('\n');
+            StringBuilder body = new StringBuilder(jsonLines.size() * 512);
+            for (String line : jsonLines) {
+                body.append(line).append('\n');
             }
             try {
                 if (path.getParent() != null) {
@@ -155,19 +208,19 @@ public interface Transport {
     /** Discards everything. The agent's behaviour when it has nowhere to report. */
     final class Noop implements Transport {
         @Override
-        public boolean send(List<RuntimeEvent> batch) {
+        public boolean sendLines(List<String> jsonLines) {
             return true;
         }
     }
 
     /** Choose a transport from the configured endpoint. */
-    static Transport forEndpoint(String endpoint, String credential) {
+    static Transport forEndpoint(String endpoint, String credential, String pins) {
         if (endpoint == null || endpoint.isBlank()) {
             return new Noop();
         }
         if (endpoint.startsWith("file:")) {
             return new File(Path.of(endpoint.substring("file:".length())));
         }
-        return new Http(endpoint, credential);
+        return new Http(endpoint, credential, CertificatePinner.parse(pins));
     }
 }

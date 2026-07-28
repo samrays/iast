@@ -30,6 +30,9 @@ public final class AgentConfig {
     private final int bufferCapacity;
     private final int heartbeatSeconds;
     private final boolean blockingEnabled;
+    private final String spoolDirectory;
+    private final long spoolMaxBytes;
+    private final String certificatePins;
 
     private AgentConfig(Builder builder) {
         this.endpoint = builder.endpoint;
@@ -45,6 +48,9 @@ public final class AgentConfig {
         this.bufferCapacity = builder.bufferCapacity;
         this.heartbeatSeconds = builder.heartbeatSeconds;
         this.blockingEnabled = builder.blockingEnabled;
+        this.spoolDirectory = builder.spoolDirectory;
+        this.spoolMaxBytes = builder.spoolMaxBytes;
+        this.certificatePins = builder.certificatePins;
     }
 
     /** Parse the {@code -javaagent:aegis.jar=key=value,key=value} argument and the environment. */
@@ -60,6 +66,9 @@ public final class AgentConfig {
         applyIfPresent(builder, "capture", System.getenv("AEGIS_CAPTURE_REQUEST_BODY"));
         applyIfPresent(builder, "redact_keys", System.getenv("AEGIS_REDACT_KEYS"));
         applyIfPresent(builder, "packages", System.getenv("AEGIS_APPLICATION_PACKAGES"));
+        applyIfPresent(builder, "spool_dir", System.getenv("AEGIS_SPOOL_DIR"));
+        applyIfPresent(builder, "spool_max_mb", System.getenv("AEGIS_SPOOL_MAX_MB"));
+        applyIfPresent(builder, "pins", System.getenv("AEGIS_CERTIFICATE_PINS"));
 
         if (agentArgs != null && !agentArgs.isBlank()) {
             for (String pair : agentArgs.split(",")) {
@@ -94,6 +103,10 @@ public final class AgentConfig {
             case "buffer_capacity" -> builder.bufferCapacity = (int) parseDouble(value, 4096);
             case "heartbeat_seconds" -> builder.heartbeatSeconds = (int) parseDouble(value, 30);
             case "blocking" -> builder.blockingEnabled = Boolean.parseBoolean(value);
+            case "spool_dir" -> builder.spoolDirectory = value;
+            case "spool_max_mb" ->
+                    builder.spoolMaxBytes = (long) (parseDouble(value, 64) * 1024 * 1024);
+            case "pins", "certificate_pins" -> builder.certificatePins = value;
             default -> {
                 // Unknown keys are ignored rather than fatal: a newer control plane must be
                 // able to hand an older agent a setting it has never heard of.
@@ -178,6 +191,47 @@ public final class AgentConfig {
         return blockingEnabled;
     }
 
+    /** Where undelivered events are persisted while the control plane is unreachable. */
+    public String spoolDirectory() {
+        return spoolDirectory;
+    }
+
+    public long spoolMaxBytes() {
+        return spoolMaxBytes;
+    }
+
+    /** Comma-separated {@code sha256/<base64>} public-key pins; blank means ordinary TLS. */
+    public String certificatePins() {
+        return certificatePins;
+    }
+
+    /**
+     * Flatten to plain strings for the hand-off to the bootstrap-loaded runtime.
+     *
+     * <p>The runtime lives on the bootstrap class loader and this class does not — deliberately,
+     * because a bootstrap copy of {@code AgentConfig} would be split from its own {@code Builder}
+     * by the verifier. So the boundary between them can only carry types both loaders resolve to
+     * the same class, which in practice means {@code java.base}. A map of strings keeps that
+     * boundary stable: adding a setting no longer changes a reflected method signature.
+     */
+    public java.util.Map<String, String> toMap() {
+        java.util.Map<String, String> settings = new java.util.LinkedHashMap<>();
+        settings.put("endpoint", endpoint);
+        settings.put("api_key", apiKey);
+        settings.put("application", applicationName);
+        settings.put("environment", environment);
+        settings.put("cpu_budget_pct", Double.toString(cpuBudgetPct));
+        settings.put("capture", captureMode.name());
+        settings.put("max_value_length", Integer.toString(maxValueLength));
+        settings.put("redact_keys", String.join(",", redactKeys));
+        settings.put("packages", String.join(",", applicationPackages));
+        settings.put("buffer_capacity", Integer.toString(bufferCapacity));
+        settings.put("spool_dir", spoolDirectory);
+        settings.put("spool_max_bytes", Long.toString(spoolMaxBytes));
+        settings.put("pins", certificatePins);
+        return settings;
+    }
+
     public Redactor newRedactor() {
         return new Redactor(redactKeys, captureMode, maxValueLength, false);
     }
@@ -201,6 +255,9 @@ public final class AgentConfig {
         private int bufferCapacity = 4096;
         private int heartbeatSeconds = 30;
         private boolean blockingEnabled = false;
+        private String spoolDirectory = "";
+        private long spoolMaxBytes = 64L * 1024 * 1024;
+        private String certificatePins = "";
 
         public Builder endpoint(String value) {
             this.endpoint = value;
@@ -239,6 +296,21 @@ public final class AgentConfig {
 
         public Builder bufferCapacity(int value) {
             this.bufferCapacity = value;
+            return this;
+        }
+
+        public Builder spoolDirectory(String value) {
+            this.spoolDirectory = value;
+            return this;
+        }
+
+        public Builder spoolMaxBytes(long value) {
+            this.spoolMaxBytes = value;
+            return this;
+        }
+
+        public Builder certificatePins(String value) {
+            this.certificatePins = value;
             return this;
         }
 

@@ -74,6 +74,10 @@ class ServletIT {
     }
 
     private static Run runWebApp(Path eventsFile) throws Exception {
+        return runWebApp("endpoint=file:" + eventsFile.toString().replace('\\', '/'), eventsFile);
+    }
+
+    private static Run runWebApp(String extraAgentArgs, Path eventsFile) throws Exception {
         List<String> command =
                 List.of(
                         Path.of(System.getProperty("java.home"), "bin", "java").toString(),
@@ -81,8 +85,7 @@ class ServletIT {
                                 + agentJar
                                 + "=application=servlet-demo,environment=DEVELOPMENT,"
                                 + "packages=dev.aegis.agent.demo,capture=FULL,"
-                                + "endpoint=file:"
-                                + eventsFile.toString().replace('\\', '/'),
+                                + extraAgentArgs,
                         "-cp",
                         classpath,
                         "dev.aegis.agent.demo.ServletApp");
@@ -175,6 +178,35 @@ class ServletIT {
                 run.ofType("EVENT_TYPE_TAINT_HIT").stream()
                         .noneMatch(line -> line.contains("\"path\":\"/echo\"")),
                 String.join("\n", run.events()));
+    }
+
+    @Test
+    @DisplayName("an unreachable control plane spools findings to disk instead of losing them")
+    void spoolsWhenTheControlPlaneIsDown(@TempDir Path temp) throws Exception {
+        Path spool = temp.resolve("spool");
+        // Port 1 refuses immediately: a control plane that is genuinely down, not merely slow.
+        Run run =
+                runWebApp(
+                        "endpoint=http://127.0.0.1:1,spool_dir="
+                                + spool.toString().replace('\\', '/'),
+                        temp.resolve("unused.ndjson"));
+
+        assertEquals(0, run.exitCode(), "the application must not care:\n" + run.stderr());
+        assertEquals("3", run.requireLine("SEARCH_ROWS"));
+        assertEquals("0", run.requireLine("HOOK_FAILURES"));
+
+        assertTrue(Files.isDirectory(spool), "nothing was spooled at all");
+        List<String> spooled = new ArrayList<>();
+        try (var segments = Files.list(spool)) {
+            for (Path segment : segments.toList()) {
+                spooled.addAll(Files.readAllLines(segment));
+            }
+        }
+
+        // An outage on our side must not become a blind spot on the customer's.
+        assertTrue(
+                spooled.stream().anyMatch(line -> line.contains("\"rule_key\":\"sql-injection\"")),
+                "the finding was lost when the endpoint refused:\n" + String.join("\n", spooled));
     }
 
     @Test
