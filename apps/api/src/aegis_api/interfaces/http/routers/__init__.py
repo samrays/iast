@@ -1,0 +1,20 @@
+"""HTTP routers, one module per resource family."""
+
+from fastapi import APIRouter
+
+from . import agents, api_keys, applications, audit, auth, organizations
+
+
+def build_api_router(prefix: str) -> APIRouter:
+    router = APIRouter(prefix=prefix)
+    router.include_router(auth.router)
+    router.include_router(organizations.router)
+    router.include_router(api_keys.router)
+    router.include_router(applications.router)
+    router.include_router(applications.environments_router)
+    router.include_router(agents.router)
+    router.include_router(audit.router)
+    return router
+
+
+__all__ = ["build_api_router"]

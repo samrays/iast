@@ -1,0 +1,147 @@
+syntax = "proto3";
+
+// Agent ⇄ control-plane wire contract (ADR-0005).
+//
+// Additive-only within v1: a newer agent may send fields an older gateway ignores, and an
+// older agent must always be accepted by a newer gateway. Agents are supported for 18
+// months from release, so field numbers are never reused and nothing is ever renumbered.
+//
+// The JSON/NDJSON fallback transport carries exactly these shapes with `json_name`
+// semantics, so a schema change lands in both transports at once.
+
+package aegis.agent.v1;
+
+option java_package = "dev.aegis.agent.proto";
+option java_multiple_files = true;
+
+// --- registration -------------------------------------------------------------------
+
+message RegisterRequest {
+  // The application this process belongs to. Created on first sight if unknown.
+  string application_name = 1;
+  Environment environment = 2;
+  Language language = 3;
+  // Derived by the agent from stable host and process attributes, so a restarting pod
+  // reuses its registration instead of creating a new agent row on every deploy.
+  string fingerprint = 4;
+  string hostname = 5;
+  string agent_version = 6;
+  string runtime_version = 7;
+}
+
+message RegisterResponse {
+  string agent_id = 1;
+  // Short-lived, audience-scoped credential. Renewed through Heartbeat.
+  string agent_token = 2;
+  int64 agent_token_expires_at_ms = 3;
+  string config_version = 4;
+  int32 heartbeat_interval_seconds = 5;
+}
+
+// --- heartbeat ----------------------------------------------------------------------
+
+message HeartbeatRequest {
+  // Self-measured overhead. The governor degrades the agent before this ever gets large.
+  double cpu_overhead_pct = 1;
+  int32 memory_mb = 2;
+  uint32 events_sent = 3;
+  // Shed by the bounded ring buffer. Non-zero means the agent chose to lose telemetry
+  // rather than slow the application down — deliberate, and worth surfacing.
+  uint32 events_dropped = 4;
+  Health health = 5;
+  string config_version = 6;
+}
+
+message Health {
+  // Hooks that disabled themselves after throwing. Fail-open leaves a trace here.
+  uint32 hooks_disabled = 1;
+  uint32 taint_table_overflows = 2;
+  GovernorLevel governor_level = 3;
+  repeated string coverage_gaps = 4;
+}
+
+enum GovernorLevel {
+  GOVERNOR_LEVEL_UNSPECIFIED = 0;
+  GOVERNOR_LEVEL_FULL = 1;        // everything on
+  GOVERNOR_LEVEL_SAMPLED = 2;     // dataflow on a sample of requests
+  GOVERNOR_LEVEL_CONFIG_ONLY = 3; // dataflow off; config and dependency scanning only
+  GOVERNOR_LEVEL_HEARTBEAT = 4;   // detection off
+  GOVERNOR_LEVEL_UNINSTALLED = 5; // agent removed itself
+}
+
+message HeartbeatResponse {
+  string config_version = 1;
+  bool config_changed = 2;
+  // Remote kill switch: honoured within one heartbeat interval, without a restart.
+  bool disabled = 3;
+}
+
+// --- configuration ------------------------------------------------------------------
+
+message ConfigResponse {
+  string config_version = 1;
+  ProtectionMode protection_mode = 2;
+  CaptureMode capture_request_body = 3;
+  uint32 max_value_length = 4;
+  // Redaction happens inside the customer process, before anything crosses the network
+  // (threat T-04). The control plane may only ever *narrow* what is captured.
+  repeated string redact_keys = 5;
+  double cpu_budget_pct = 6;
+  repeated string enabled_rules = 7;
+  int32 heartbeat_interval_seconds = 8;
+}
+
+enum ProtectionMode {
+  PROTECTION_MODE_UNSPECIFIED = 0;
+  PROTECTION_MODE_OFF = 1;
+  PROTECTION_MODE_MONITOR = 2;
+  PROTECTION_MODE_BLOCK = 3;
+}
+
+enum CaptureMode {
+  CAPTURE_MODE_UNSPECIFIED = 0;
+  CAPTURE_MODE_NONE = 1;
+  CAPTURE_MODE_HASHED = 2;
+  CAPTURE_MODE_TRUNCATED = 3;
+  CAPTURE_MODE_FULL = 4;
+}
+
+enum Environment {
+  ENVIRONMENT_UNSPECIFIED = 0;
+  ENVIRONMENT_DEVELOPMENT = 1;
+  ENVIRONMENT_QA = 2;
+  ENVIRONMENT_STAGING = 3;
+  ENVIRONMENT_PRODUCTION = 4;
+}
+
+enum Language {
+  LANGUAGE_UNSPECIFIED = 0;
+  LANGUAGE_JAVA = 1;
+  LANGUAGE_DOTNET = 2;
+  LANGUAGE_NODE = 3;
+  LANGUAGE_PYTHON = 4;
+  LANGUAGE_GO = 5;
+}
+
+// --- ingest -------------------------------------------------------------------------
+
+service AgentIngest {
+  rpc Register (RegisterRequest) returns (RegisterResponse);
+  rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse);
+  rpc FetchConfig (ConfigRequest) returns (ConfigResponse);
+  // Bidirectional so the server can apply credit-based backpressure. The agent throttles
+  // to the credit window; it never blocks the application thread to do so.
+  rpc StreamEvents (stream RuntimeEvent) returns (stream IngestAck);
+}
+
+message ConfigRequest {
+  string config_version = 1;
+}
+
+message IngestAck {
+  // Highest contiguous event id accepted. The agent advances its spool cursor to this.
+  string ack_cursor = 1;
+  // Remaining events the server is willing to accept before the next ack.
+  uint32 credit = 2;
+  repeated string rejected_event_ids = 3;
+}

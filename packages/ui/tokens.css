@@ -1,0 +1,138 @@
+/*
+ * Aegis design tokens.
+ *
+ * Light is the default. Dark is a first-class alternative, not an afterthought — SOC
+ * analysts work in dark rooms and the console has to be usable on a wall display — but the
+ * product opens light because most users read it in an office under fluorescent light.
+ *
+ * Everything is HSL channel triplets so Tailwind can compose them with opacity modifiers
+ * (`bg-primary/10`). Never hard-code a colour in a component; if a shade is missing, add a
+ * token here so both themes get it.
+ */
+
+:root {
+  /* --- surfaces ------------------------------------------------------------ */
+  --background: 220 33% 98%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --muted: 220 20% 95%;
+  --muted-foreground: 220 12% 42%;
+  --border: 220 18% 89%;
+  --input: 220 18% 89%;
+  --ring: 243 75% 58%;
+
+  /* --- brand --------------------------------------------------------------- */
+  --primary: 243 72% 52%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 220 20% 95%;
+  --secondary-foreground: 222 40% 20%;
+  --accent: 243 72% 96%;
+  --accent-foreground: 243 72% 34%;
+  --destructive: 0 72% 47%;
+  --destructive-foreground: 0 0% 100%;
+
+  /*
+   * --- severity ------------------------------------------------------------
+   * A five-step scale, not an ad-hoc set of reds. Ordering must stay perceptually
+   * monotonic: a CRITICAL badge has to read as louder than HIGH at a glance, on a wall
+   * display, to someone who is not looking directly at it.
+   */
+  --severity-critical: 350 78% 42%;
+  --severity-critical-surface: 350 84% 96%;
+  --severity-high: 18 84% 46%;
+  --severity-high-surface: 20 90% 96%;
+  --severity-medium: 38 88% 42%;
+  --severity-medium-surface: 42 92% 95%;
+  --severity-low: 199 82% 38%;
+  --severity-low-surface: 199 88% 95%;
+  --severity-info: 220 12% 46%;
+  --severity-info-surface: 220 20% 96%;
+
+  /* --- fleet and lifecycle status ------------------------------------------ */
+  --status-online: 152 62% 34%;
+  --status-online-surface: 152 66% 95%;
+  --status-degraded: 38 88% 42%;
+  --status-degraded-surface: 42 92% 95%;
+  --status-offline: 220 12% 50%;
+  --status-offline-surface: 220 20% 96%;
+  --status-disabled: 220 10% 60%;
+  --status-disabled-surface: 220 16% 96%;
+
+  /* --- charts (categorical; ordered for adjacent-series contrast) ---------- */
+  --chart-1: 243 72% 55%;
+  --chart-2: 173 62% 38%;
+  --chart-3: 24 84% 52%;
+  --chart-4: 280 62% 55%;
+  --chart-5: 199 82% 45%;
+  --chart-6: 340 70% 52%;
+
+  --radius: 0.6rem;
+}
+
+.dark {
+  --background: 224 33% 8%;
+  --foreground: 220 22% 94%;
+  --card: 224 30% 11%;
+  --card-foreground: 220 22% 94%;
+  --popover: 224 32% 10%;
+  --popover-foreground: 220 22% 94%;
+  --muted: 223 24% 17%;
+  --muted-foreground: 220 14% 66%;
+  --border: 223 22% 20%;
+  --input: 223 22% 22%;
+  --ring: 243 80% 68%;
+
+  --primary: 243 80% 68%;
+  --primary-foreground: 224 40% 10%;
+  --secondary: 223 24% 17%;
+  --secondary-foreground: 220 22% 94%;
+  --accent: 243 40% 22%;
+  --accent-foreground: 243 90% 88%;
+  --destructive: 0 68% 58%;
+  --destructive-foreground: 0 0% 100%;
+
+  /* Dark severities are lifted in lightness and dropped in saturation: the same hues at
+     light-theme values vibrate against a dark background and lose their ordering. */
+  --severity-critical: 350 88% 68%;
+  --severity-critical-surface: 350 50% 18%;
+  --severity-high: 20 90% 64%;
+  --severity-high-surface: 20 50% 16%;
+  --severity-medium: 40 92% 60%;
+  --severity-medium-surface: 40 45% 15%;
+  --severity-low: 199 88% 62%;
+  --severity-low-surface: 199 50% 15%;
+  --severity-info: 220 14% 68%;
+  --severity-info-surface: 223 24% 17%;
+
+  --status-online: 152 60% 55%;
+  --status-online-surface: 152 40% 15%;
+  --status-degraded: 40 92% 60%;
+  --status-degraded-surface: 40 45% 15%;
+  --status-offline: 220 12% 62%;
+  --status-offline-surface: 223 24% 17%;
+  --status-disabled: 220 10% 50%;
+  --status-disabled-surface: 223 20% 15%;
+
+  --chart-1: 243 84% 70%;
+  --chart-2: 173 60% 52%;
+  --chart-3: 24 88% 64%;
+  --chart-4: 280 70% 70%;
+  --chart-5: 199 84% 62%;
+  --chart-6: 340 76% 66%;
+}
+
+/* Respect a user who has asked the OS for reduced motion. Transitions in a monitoring
+   console are decoration; the data is the point. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

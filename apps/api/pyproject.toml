@@ -1,0 +1,121 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aegis-api"
+version = "0.2.0"
+description = "Aegis IAST control-plane API — identity, tenancy, RBAC, inventory and agent fleet"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.8,<3.0",
+    "pydantic-settings>=2.4",
+    "email-validator>=2.2",
+    "sqlalchemy[asyncio]>=2.0.32,<3.0",
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+    "argon2-cffi>=23.1",
+    "pyjwt>=2.9",
+    "pyotp>=2.9",
+    "cryptography>=43.0",
+    "structlog>=24.4",
+    "prometheus-client>=0.20",
+    "redis>=5.0",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "httpx>=0.27",
+    "freezegun>=1.5",
+    "ruff>=0.6",
+    "black>=24.8",
+    "mypy>=1.11",
+    "types-redis",
+]
+
+[project.scripts]
+aegis-api = "aegis_api.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",      # pycodestyle
+    "F",           # pyflakes
+    "I",           # isort
+    "N",           # pep8-naming
+    "UP",          # pyupgrade
+    "B",           # bugbear
+    "C4",          # comprehensions
+    "DTZ",         # timezone-aware datetimes
+    "S",           # bandit
+    "SIM",         # simplify
+    "RUF",
+    "ASYNC",
+]
+ignore = [
+    "S101",   # assert — used deliberately in tests and invariant checks
+    "B008",   # function call in default argument — required by FastAPI Depends
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S311", "S608"]
+"alembic/**" = ["N999", "E501", "ARG001"]
+# The audit action catalogue names events like PASSWORD_CHANGED; the bandit rule reads
+# every such constant as a hardcoded credential.
+"src/aegis_api/domain/entities/audit.py" = ["S105"]
+"src/aegis_api/domain/entities/access.py" = ["S105"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+mypy_path = "src"
+packages = ["aegis_api"]
+
+[[tool.mypy.overrides]]
+module = ["pyotp.*", "prometheus_client.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# One event loop for the whole session. The engine and its connection pool are created
+# once; a per-test loop would leave asyncpg connections bound to a loop that has closed.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+addopts = "-q --strict-markers --cov=aegis_api --cov-report=term-missing --cov-fail-under=90"
+markers = [
+    "integration: requires a live PostgreSQL database",
+    "security: asserts a control from docs/02-threat-model.md",
+]
+filterwarnings = ["error::DeprecationWarning:aegis_api.*"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/aegis_api"]
+omit = ["*/alembic/*", "*/__main__.py"]
+# SQLAlchemy's asyncio layer bridges to the sync driver through greenlets. Without
+# declaring that, coverage loses the trace function at the first database call and reports
+# everything after it as unexecuted — which looks exactly like a missing test.
+concurrency = ["greenlet", "thread"]

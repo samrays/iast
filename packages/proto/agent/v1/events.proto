@@ -1,0 +1,190 @@
+syntax = "proto3";
+
+// Runtime telemetry emitted by an agent.
+//
+// One envelope, several payload kinds. A finding is not a hypothesis: a TAINT_HIT carries
+// the ordered taint path, the sink signature and the application stack frames that produced
+// it, so the control plane can show *why* it believes what it believes (docs/05 §3).
+
+package aegis.agent.v1;
+
+import "agent/v1/agent.proto";
+
+option java_package = "dev.aegis.agent.proto";
+option java_multiple_files = true;
+
+message RuntimeEvent {
+  // Client-generated ULID. The server deduplicates on it, which is what makes the
+  // at-least-once spool replay safe.
+  string event_id = 1;
+  EventType type = 2;
+  int64 occurred_at_ms = 3;
+  // Monotonic nanos since agent start, sent alongside wall clock so the server can detect
+  // and correct for clock skew rather than silently trusting the host.
+  int64 monotonic_nanos = 4;
+  // True when this event came off the offline spool after a reconnect.
+  bool replayed = 5;
+
+  string trace_id = 6;
+  string span_id = 7;
+
+  oneof payload {
+    TaintHit taint_hit = 10;
+    AttackEvent attack = 11;
+    RouteObserved route = 12;
+    DependencyObserved dependency = 13;
+    ConfigFinding config_finding = 14;
+    CoverageGap coverage_gap = 15;
+  }
+}
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_TAINT_HIT = 1;
+  EVENT_TYPE_ATTACK = 2;
+  EVENT_TYPE_ROUTE = 3;
+  EVENT_TYPE_DEPENDENCY = 4;
+  EVENT_TYPE_CONFIG = 5;
+  EVENT_TYPE_COVERAGE_GAP = 6;
+}
+
+// --- dataflow -------------------------------------------------------------------------
+
+message TaintHit {
+  string rule_key = 1;             // "sql-injection"
+  Severity severity = 2;
+  Confidence confidence = 3;
+
+  HttpRequestSummary request = 4;
+  // Class#method(descriptor) — no line numbers, so a refactor does not resurrect a closed
+  // finding (ADR-0009).
+  string sink_signature = 5;
+  SourceKind source_kind = 6;
+  string source_name = 7;          // parameter or header name
+
+  // The value as it reached the sink, redacted per policy, with the attacker-controlled
+  // ranges marked. This is the evidence a developer actually reads.
+  string sink_argument = 8;
+  repeated TaintRange ranges = 9;
+
+  // Top application frames only; framework and library frames are excluded so the
+  // fingerprint survives a dependency bump.
+  repeated StackFrame stack = 10;
+  string stack_fingerprint = 11;
+
+  // Sanitizers seen on the path. Empty on a CONFIRMED hit, by definition.
+  repeated string sanitizers_applied = 12;
+  repeated string validators_applied = 13;
+}
+
+message TaintRange {
+  uint32 start = 1;
+  uint32 length = 2;
+  SourceKind source = 3;
+  string source_name = 4;
+  // Rule classes this range is no longer dangerous for, because a sanitizer cleared it.
+  repeated string cleared_for = 5;
+}
+
+message StackFrame {
+  string declaring_class = 1;
+  string method_name = 2;
+  // Deliberately excluded from the identity hash; present for humans only.
+  int32 line_number = 3;
+  bool application_code = 4;
+}
+
+enum SourceKind {
+  SOURCE_KIND_UNSPECIFIED = 0;
+  SOURCE_KIND_PARAMETER = 1;
+  SOURCE_KIND_HEADER = 2;
+  SOURCE_KIND_COOKIE = 3;
+  SOURCE_KIND_BODY = 4;
+  SOURCE_KIND_PATH = 5;
+  SOURCE_KIND_QUERY_STRING = 6;
+  SOURCE_KIND_MESSAGE_QUEUE = 7;
+  SOURCE_KIND_DATABASE = 8;  // second-order
+  SOURCE_KIND_FILE = 9;
+}
+
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_INFO = 1;
+  SEVERITY_LOW = 2;
+  SEVERITY_MEDIUM = 3;
+  SEVERITY_HIGH = 4;
+  SEVERITY_CRITICAL = 5;
+}
+
+enum Confidence {
+  CONFIDENCE_UNSPECIFIED = 0;
+  // Reached a sink through a validator only — reported at reduced severity.
+  CONFIDENCE_OBSERVED = 1;
+  // Reached a sink with no sanitizer on the path.
+  CONFIDENCE_CONFIRMED = 2;
+  // Reached a sink *and* the payload matched an attack signature.
+  CONFIDENCE_EXPLOITED = 3;
+}
+
+// --- attack ---------------------------------------------------------------------------
+
+message AttackEvent {
+  string rule_key = 1;
+  AttackPhase phase = 2;
+  double confidence = 3;
+  string source_ip = 4;
+  string payload_hash = 5;
+  HttpRequestSummary request = 6;
+  // Present only when the payload actually reached a sink. Blocking triggers on this and
+  // never on a pattern match at the source alone (docs/02 §4.3).
+  string sink_signature = 7;
+}
+
+enum AttackPhase {
+  ATTACK_PHASE_UNSPECIFIED = 0;
+  ATTACK_PHASE_PROBED = 1;
+  ATTACK_PHASE_EXPLOITED = 2;
+  ATTACK_PHASE_BLOCKED = 3;
+  ATTACK_PHASE_SUPPRESSED = 4;
+}
+
+// --- discovery --------------------------------------------------------------------------
+
+message RouteObserved {
+  string method = 1;
+  string path_template = 2;
+  bool authenticated = 3;
+}
+
+message DependencyObserved {
+  string name = 1;
+  string version = 2;
+  string ecosystem = 3;
+  // Loaded *and* invoked, which is what makes a CVE reachable rather than merely present.
+  bool runtime_loaded = 4;
+}
+
+message ConfigFinding {
+  string rule_key = 1;
+  Severity severity = 2;
+  string detail = 3;
+  string component = 4;
+}
+
+// A place the agent knows it cannot follow taint: a native boundary, reflection through a
+// dynamic proxy, bundled code. Reported so the console can show an application as
+// *unknown* rather than *clean* (ADR-0007).
+message CoverageGap {
+  string reason = 1;
+  string component = 2;
+}
+
+message HttpRequestSummary {
+  string method = 1;
+  string path = 2;
+  string route_template = 3;
+  map<string, string> headers = 4;   // redacted
+  map<string, string> parameters = 5; // redacted
+  string body_excerpt = 6;            // redacted and truncated per CaptureMode
+  string remote_addr = 7;
+}

@@ -1,0 +1,317 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      dashboard: ${{ steps.filter.outputs.dashboard }}
+      gateway: ${{ steps.filter.outputs.gateway }}
+      agent: ${{ steps.filter.outputs.agent }}
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            api:
+              - 'apps/api/**'
+              - 'scripts/**'
+              - '.github/workflows/ci.yml'
+            gateway:
+              - 'apps/gateway/**'
+              - 'packages/proto/**'
+              - '.github/workflows/ci.yml'
+            agent:
+              - 'agents/runtime/java-agent/**'
+              - 'packages/proto/**'
+              - '.github/workflows/ci.yml'
+            dashboard:
+              - 'apps/dashboard/**'
+              - 'packages/ui/**'
+              - 'package.json'
+              - '.github/workflows/ci.yml'
+            docs:
+              - 'docs/**'
+              - '*.md'
+
+  quality:
+    name: Lint, format and types
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install
+        run: pip install -e "apps/api[dev]"
+      - name: Ruff
+        run: ruff check apps/api
+      - name: Black
+        run: black --check apps/api
+      - name: mypy
+        working-directory: apps/api
+        run: mypy src
+      - name: Layer boundaries (ADR-0002)
+        run: python scripts/check_layering.py
+
+  test:
+    name: Tests and coverage
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aegis_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install
+        run: pip install -e "apps/api[dev]"
+      - name: Run suite
+        working-directory: apps/api
+        env:
+          # The suite creates a NOSUPERUSER role of its own from this admin connection:
+          # superusers bypass row-level security, so the isolation tests would be
+          # meaningless if the application connected as one.
+          AEGIS_TEST_ADMIN_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/aegis_test
+        run: pytest --cov-report=xml --cov-report=term
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: apps/api/coverage.xml
+
+  migrations:
+    name: Migrations apply and revert cleanly
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aegis
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install
+        run: pip install -e "apps/api[dev]"
+      - name: Upgrade, downgrade, upgrade
+        working-directory: apps/api
+        env:
+          AEGIS_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/aegis
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+      - name: Assert the migration matches the ORM metadata
+        working-directory: apps/api
+        env:
+          AEGIS_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/aegis
+        run: |
+          # An empty autogenerate diff proves the checked-in migration and the models agree.
+          alembic check
+
+  dashboard:
+    name: Console types, lint and unit tests
+    needs: changes
+    if: needs.changes.outputs.dashboard == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+
+  dashboard-e2e:
+    name: Console end-to-end against a live API
+    needs: changes
+    if: needs.changes.outputs.dashboard == 'true' || needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aegis
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      AEGIS_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/aegis
+      AEGIS_CORS_ORIGINS: http://localhost:3100
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install
+        run: |
+          pip install -e "apps/api[dev]"
+          npm ci
+      - name: Migrate and start the API
+        working-directory: apps/api
+        run: |
+          alembic upgrade head
+          nohup python -m uvicorn aegis_api.main:app --port 8080 --host 127.0.0.1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8080/healthz && break || sleep 1; done
+      - name: Build and start the console
+        run: |
+          npm run build
+          nohup npm run start --workspace @aegis/dashboard &
+          for i in $(seq 1 60); do curl -sf http://localhost:3100/login && break || sleep 1; done
+      - name: Playwright
+        working-directory: apps/dashboard
+        run: |
+          npx playwright install --with-deps chromium
+          E2E_NO_SERVER=1 npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: apps/dashboard/playwright-report
+
+  gateway:
+    name: Gateway lint, types and tests
+    needs: changes
+    if: needs.changes.outputs.gateway == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install
+        run: pip install -e "apps/gateway[dev]"
+      - name: Ruff
+        run: ruff check apps/gateway
+      - name: Black
+        run: black --check apps/gateway
+      - name: mypy
+        working-directory: apps/gateway
+        run: mypy src
+      - name: Layer boundaries (ADR-0002)
+        run: python scripts/check_layering.py
+      - name: Tests
+        working-directory: apps/gateway
+        run: pytest
+
+  agent:
+    name: Java agent unit and integration tests
+    needs: changes
+    if: needs.changes.outputs.agent == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Verify
+        working-directory: agents/runtime/java-agent
+        # `verify`, not `test`: the JDK-core instrumentation can only be exercised against the
+        # packaged jar, because bootstrap injection needs a real jar file.
+        run: mvn -B verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aegis-agent-jar
+          path: agents/runtime/java-agent/target/aegis-agent.jar
+
+  security:
+    name: Secrets and dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Dependency audit
+        run: |
+          pip install pip-audit
+          pip-audit --skip-editable -r <(pip install -e "apps/api" --dry-run --report - 2>/dev/null || echo "") || true
+          pip install -e "apps/api"
+          pip-audit --skip-editable
+
+  changelog:
+    name: CHANGELOG updated
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require a CHANGELOG entry
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1
+          if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -q '^CHANGELOG.md$'; then
+            echo "CHANGELOG updated."
+          else
+            echo "::error::Changes under apps/ require a CHANGELOG.md entry (see CONTRIBUTING.md)."
+            exit 1
+          fi

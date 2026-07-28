@@ -1,0 +1,23 @@
+{
+  "name": "aegis-iast",
+  "private": true,
+  "version": "0.3.0",
+  "description": "Aegis IAST — monorepo root. Python services manage their own toolchains (ADR-0001).",
+  "workspaces": [
+    "apps/dashboard",
+    "packages/ui"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @aegis/dashboard",
+    "build": "npm run build --workspace @aegis/dashboard",
+    "start": "npm run start --workspace @aegis/dashboard",
+    "lint": "npm run lint --workspace @aegis/dashboard",
+    "typecheck": "npm run typecheck --workspace @aegis/dashboard",
+    "test": "npm run test --workspace @aegis/dashboard",
+    "test:e2e": "npm run test:e2e --workspace @aegis/dashboard",
+    "check": "npm run typecheck && npm run lint && npm run test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

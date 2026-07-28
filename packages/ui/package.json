@@ -1,0 +1,21 @@
+{
+  "name": "@aegis/ui",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Aegis design system: tokens and the Tailwind preset every surface builds on.",
+  "type": "module",
+  "main": "./tailwind-preset.js",
+  "exports": {
+    "./preset": {
+      "types": "./tailwind-preset.d.ts",
+      "default": "./tailwind-preset.js"
+    },
+    "./tokens.css": "./tokens.css"
+  },
+  "files": [
+    "tailwind-preset.js",
+    "tokens.css",
+    "tailwind-preset.d.ts"
+  ],
+  "types": "./tailwind-preset.d.ts"
+}

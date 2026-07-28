@@ -1,0 +1,231 @@
+# Runtime Agent Design
+
+The agent is the product. Everything else is a way to store, reason about, and present what the agent
+sees. This document specifies the design shared by all five language agents and the per-language
+mechanics that differ.
+
+## 1. Design principles
+
+1. **Never break the application.** Every hook is wrapped; any internal error disables that hook and
+   returns control immediately. There is no code path in which an agent exception propagates into
+   application code.
+2. **Bounded cost.** CPU, memory, and event volume are governed with hard ceilings and automatic
+   degradation. The agent measures its own overhead and will uninstall itself before it becomes an
+   incident.
+3. **Never block.** No network or disk I/O on the request thread. Events go into a bounded ring buffer
+   drained by a background thread; a full buffer drops, it does not wait.
+4. **Redact at the source.** Sensitive values are redacted inside the customer's process, before
+   anything crosses the network.
+5. **Data, not code, ships weekly.** Detection rules are declarative bundles validated against a
+   schema. New detections do not require a new agent binary.
+
+## 2. Component model
+
+```mermaid
+graph TB
+    subgraph Process["Customer application process"]
+        BOOT["Bootstrap<br/>premain / profiler / require-hook"]
+        INST["Instrumentation engine<br/>bytecode / IL / module patching"]
+        RULES["Rule engine<br/>sources, propagators, sinks, sanitizers"]
+        TAINT["Taint tracker<br/>range algebra + context propagation"]
+        CTX["Request context<br/>thread-local / AsyncLocal / contextvars"]
+        DET["Detectors<br/>dataflow, config, crypto, deps, routes"]
+        ATT["Attack classifier"]
+        RED["Redactor"]
+        BUF["Bounded ring buffer"]
+        GOV["Resource governor"]
+        TX["Transport<br/>gRPC/mTLS + offline spool"]
+        CFG["Config client<br/>poll, verify signature, hot-swap"]
+    end
+    BOOT --> INST
+    INST --> RULES
+    RULES --> TAINT
+    TAINT --> CTX
+    TAINT --> DET
+    DET --> ATT
+    DET --> RED
+    ATT --> RED
+    RED --> BUF
+    BUF --> TX
+    GOV --> INST
+    GOV --> BUF
+    CFG --> RULES
+    TX --> CFG
+```
+
+## 3. The taint model
+
+### 3.1 Vocabulary
+
+| Term | Definition | Examples |
+|---|---|---|
+| **Source** | An API returning attacker-controllable data | `request.getParameter`, header/cookie/body readers, message-queue payloads, file uploads, database reads (second-order) |
+| **Propagator** | An operation that carries taint from input to output | `concat`, `substring`, `StringBuilder.append`, `format`, `toLowerCase`, JSON/XML serialization, ORM parameter binding |
+| **Sanitizer** | An operation that removes taint for a specific rule class | `PreparedStatement` binding (SQLi), HTML entity encoding (XSS), `Path.normalize` + allow-list (traversal), parameterized LDAP filters |
+| **Validator** | An operation that narrows taint without removing it | regex match, length check, enum membership — downgrades confidence, does not clear taint |
+| **Sink** | A security-sensitive operation | `Statement.execute`, `Runtime.exec`, `new File`, `ObjectInputStream.readObject`, template render, `Cipher.getInstance`, HTTP client |
+
+### 3.2 Range-based tracking
+
+Taint is tracked as byte/char **ranges** over a value, not as a boolean. This is what lets the platform
+distinguish "the whole query is attacker-controlled" from "one bound parameter is" and to show the user
+exactly which characters are theirs.
+
+```
+value:  SELECT * FROM users WHERE name = 'alice' AND role = 'admin'
+ranges:                                   ^^^^^ [PARAMETER:name, 41..46]
+```
+
+Operations transform ranges:
+
+| Operation | Range transform |
+|---|---|
+| `concat(a, b)` | ranges(a) ∪ shift(ranges(b), len(a)) |
+| `substring(i, j)` | intersect each range with [i, j), shift by −i |
+| `replace(x, y)` | recompute offsets; taint is preserved unless the rule marks the replacement as sanitizing |
+| `toUpperCase` / `trim` | offsets adjusted, tags preserved |
+| `sanitize_html(a)` | ranges(a) with the `XSS` tag cleared; other tags retained |
+
+A sink hit fires when a tainted range **overlaps** the security-relevant portion of a sink argument and
+no sanitizer for that rule class appears on the path. Confidence:
+
+| Path | Confidence |
+|---|---|
+| Tainted range reaches sink, no sanitizer, no validator | `CONFIRMED` |
+| Tainted range reaches sink through a validator only | `OBSERVED` (reported at reduced severity) |
+| Tainted range reaches sink *and* the payload matched an attack signature | `EXPLOITED` |
+| Sanitizer present for the rule class | not reported |
+
+### 3.3 Context propagation
+
+Request context must follow the request across threads, executors, and async boundaries — otherwise
+taint is lost at the first `CompletableFuture` and the product silently under-reports.
+
+| Runtime | Mechanism |
+|---|---|
+| JVM | `ThreadLocal` + instrumentation of `Executor.execute`, `ForkJoinTask`, `CompletableFuture`, Reactor/RxJava hooks |
+| .NET | `AsyncLocal<T>` — flows across `await` natively |
+| Node.js | `AsyncLocalStorage` over `async_hooks` |
+| Python | `contextvars` — flows into `asyncio` tasks; explicit copy for thread pools |
+| Go | `context.Context` threading, injected at compile time |
+
+### 3.4 Storing taint metadata without leaking memory
+
+Taint metadata cannot live on the value itself for immutable built-ins. Each runtime uses a
+**bounded, weakly-referenced side table** keyed by object identity:
+
+- JVM: `WeakConcurrentMap` with identity keys, LRU-capped per request, cleared at request end.
+- Node/Python: `WeakMap` / `WeakValueDictionary` with the same request-scoped teardown.
+
+Hard rules: the table is capped (default 10,000 entries per request); on overflow the agent stops
+tracking new values for that request and increments `taint_table_overflow`; the whole table is released
+at request completion regardless of outcome.
+
+## 4. Detection families
+
+| Family | Detection basis | Example rules |
+|---|---|---|
+| Dataflow | Taint source → sink | SQLi, NoSQLi, command injection, path traversal, SSRF, XSS (reflected/stored), LDAP/XPath/expression injection, unsafe deserialization, open redirect, log injection, header injection |
+| Configuration | Framework/config introspection at startup | Missing security headers, cookies without `Secure`/`HttpOnly`/`SameSite`, verbose errors in production, directory listing, CSRF protection disabled, permissive CORS |
+| Cryptography | Sink argument inspection | Weak hash (MD5/SHA-1) for credentials, ECB mode, hardcoded key/IV, insecure random for tokens, disabled certificate validation |
+| Authentication / Authorization | Framework hook observation | Unauthenticated sensitive route, missing authorization check on a state-changing route, session fixation, weak session entropy |
+| Dependencies | Loaded-class/module inventory | Vulnerable library **with the vulnerable method actually invoked** (runtime reachability) |
+| Sensitive data | Value classification at boundaries | PII/PCI/PHI written to logs, sent to a third-party host, or stored unencrypted |
+| API surface | Route registration + observed traffic | Undocumented endpoints, verb tampering surface, missing rate limiting |
+
+## 5. Per-language instrumentation
+
+| Runtime | Entry point | Instrumentation technology | Notes |
+|---|---|---|---|
+| **Java / JVM** | `-javaagent:aegis.jar` (`premain`), `agentmain` for attach | ASM via Byte Buddy, `ClassFileTransformer` | Frameworks: Servlet, Spring MVC/WebFlux, JAX-RS, Micronaut, Quarkus, Struts, JDBC, JPA/Hibernate, MyBatis, Jackson, Log4j/Logback. Must handle: shaded jars, OSGi/multiple classloaders, `String` being in the bootstrap classloader (helper classes are injected into bootstrap), Java module boundaries, GraalVM native-image exclusion |
+| **.NET / CLR** | `CORECLR_PROFILER` env, `ICorProfilerCallback` | IL rewriting at JIT time + Harmony for managed patching | Frameworks: ASP.NET Core middleware pipeline, EF Core, ADO.NET, Dapper, Newtonsoft/System.Text.Json. Must handle: ReadyToRun/tiered compilation, single-file publish, `AsyncLocal` flow |
+| **Node.js** | `--require @aegis/agent` or `NODE_OPTIONS` | `Module._load` patching + `import-in-the-middle` for ESM | Frameworks: Express, Koa, Fastify, NestJS, Next.js route handlers, `pg`/`mysql2`/`mongodb`/`knex`/`sequelize`/`prisma`, `child_process`, `fs`. Must handle: ESM vs CJS, bundlers that inline dependencies (documented limitation), worker threads |
+| **Python** | `sitecustomize` / `aegis-run` wrapper | `sys.monitoring` (3.12+) with a `MetaPathFinder` + wrapt function wrapping fallback | Frameworks: Django, Flask, FastAPI/Starlette, SQLAlchemy, psycopg, asyncpg, `subprocess`, `os`, Jinja2, pickle/yaml. Must handle: C-extension boundaries (taint is lost through native code — reported as a coverage gap, not silently) |
+| **Go** | Build-time source rewriting (`aegis build`) | AST instrumentation over the module graph, `//go:linkname` for stdlib | No runtime bytecode manipulation exists, so Go instrumentation is compile-time. Frameworks: net/http, Gin, Echo, Chi, `database/sql`, `os/exec`. Ships as a `go build` wrapper and a toolexec plugin |
+
+### Coverage honesty
+
+Where a runtime cannot track taint (C extensions, native interop, bundled/minified code, reflection
+through dynamic proxies), the agent emits a `coverage_gap` event rather than silently producing a
+clean bill of health. The dashboard shows per-application instrumentation coverage as a first-class
+metric — a low-coverage application with zero findings is displayed as *unknown*, not *secure*.
+
+## 6. Resource governor
+
+```
+sample every 10s:
+    cpu_pct  = agent_cpu_time_delta / process_cpu_time_delta
+    mem_mb   = agent_arena_resident
+
+if cpu_pct > budget (default 5%)          -> level 1: sample 25% of requests
+if cpu_pct > budget * 1.5 for 3 samples   -> level 2: dataflow off, config/deps only
+if cpu_pct > budget * 2.0 for 3 samples   -> level 3: detection off, heartbeat only
+if cpu_pct > budget * 3.0                 -> level 4: full uninstall, alert control plane
+
+recovery: one level per 5 consecutive samples under 60% of budget
+```
+
+Every level transition is an event; the fleet view shows degraded agents and why.
+
+## 7. Transport and offline operation
+
+| Property | Design |
+|---|---|
+| Protocol | gRPC bidirectional stream over mTLS 1.3; HTTP/JSON+NDJSON fallback |
+| Compression | zstd, falling back to gzip |
+| Certificate pinning | SPKI pin set with a primary and a rollover pin, both shipped in the agent |
+| Batching | Up to 512 events or 2 s, whichever first |
+| Backpressure | Server `IngestAck` carries a credit window; the agent throttles to it |
+| Offline mode | Disk spool at a configurable path, capped (default 256 MB), FIFO eviction; replayed on reconnect with original timestamps and a `replayed=true` flag |
+| Clock skew | Agent sends monotonic delta plus wall clock; the server records both |
+| Ack semantics | At-least-once; events carry a ULID and the server deduplicates |
+
+## 8. Configuration and updates
+
+- The agent polls `FetchConfig` on every heartbeat with the current `rules_etag`.
+- Rule bundles are **signed**; the agent verifies the signature against a pinned public key before load
+  and refuses unsigned or mis-signed bundles.
+- Rule swaps are hot — the rule engine is a versioned immutable structure swapped atomically.
+- Binary self-update is opt-in per tenant, staged, and always reversible to the pinned version.
+- A remote kill switch disables all instrumentation within one heartbeat interval.
+
+## 9. Local configuration surface
+
+```yaml
+aegis:
+  api_key: ${AEGIS_API_KEY}
+  endpoint: https://ingest.aegis.dev:443
+  application:
+    name: payments-api
+    environment: PRODUCTION
+  overhead:
+    cpu_budget_pct: 5
+    max_memory_mb: 150
+  capture:
+    request_body: TRUNCATED      # NONE | HASHED | TRUNCATED | FULL
+    max_value_length: 512
+    redact_keys: [password, token, secret, authorization, cookie, ssn, card]
+  offline:
+    spool_dir: /var/lib/aegis/spool
+    max_spool_mb: 256
+  protection:
+    mode: MONITOR                # OFF | MONITOR | BLOCK
+  logging:
+    level: WARN
+    file: /var/log/aegis/agent.log
+```
+
+Every key is overridable by environment variable (`AEGIS_CAPTURE_REQUEST_BODY=NONE`) and by remote
+configuration, in that precedence order: local file < environment < remote (remote may only *reduce*
+data capture, never increase it beyond the locally configured maximum — the customer keeps the veto).
+
+## 10. Agent test strategy
+
+| Layer | Approach |
+|---|---|
+| Unit | Range algebra, redaction, governor state machine, ring buffer — pure, exhaustive, property-based |
+| Instrumentation | Golden bytecode tests: instrument a fixture class, assert the emitted bytecode and that it verifies |
+| Benchmark | JMH (JVM) / equivalent — overhead assertions run in CI and fail the build on regression beyond budget |
+| Vulnerable-app corpus | OWASP WebGoat, Benchmark, Juice Shop, DVWA and per-language equivalents; asserted true-positive and false-positive rates gate every release |
+| Framework matrix | A grid of framework × version fixtures, each exercised end-to-end against a live control plane |
+| Chaos | Control plane unreachable, TLS failure, disk full, clock jump, OOM pressure — the application must remain healthy in every case |

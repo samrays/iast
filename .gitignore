@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+
+# Node
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+coverage/
+playwright-report/
+test-results/
+
+# JVM
+target/
+*.class
+.gradle/
+
+# .NET
+bin/
+obj/
+
+# Go
+vendor/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!**/testdata/*.key
+
+# Editors / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# Local data
+docker/volumes/
+*.log
+.aegis/
+tools/
