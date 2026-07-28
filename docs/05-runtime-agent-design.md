@@ -96,6 +96,27 @@ no sanitizer for that rule class appears on the path. Confidence:
 | Tainted range reaches sink *and* the payload matched an attack signature | `EXPLOITED` |
 | Sanitizer present for the rule class | not reported |
 
+#### The `+` operator is not `StringBuilder`
+
+Worth stating explicitly, because it is the difference between an agent that works and one that
+appears to. Since Java 9 the compiler does **not** lower `"a" + b` to a `StringBuilder`; it emits an
+`invokedynamic` whose bootstrap method asks `java.lang.invoke.StringConcatFactory` to spin a bespoke
+method handle. An agent that instruments `StringBuilder` alone therefore misses the single most common
+way SQL injection is written in Java — and misses it *silently*, which is the worst possible failure
+for a security tool, because the report still comes back clean.
+
+The JVM agent instruments the factory itself and rewrites the call site when it links, so the cost is
+paid once per site rather than once per concatenation. Argument offsets are reconstructed from the
+concat **recipe** — the layout string the factory is handed — rather than by searching the result for
+each argument, which would be slower and would mis-attribute a value that appears twice. If the
+reconstructed length disagrees with the actual result, propagation is abandoned: a finding pointing at
+the wrong characters is worse than no finding at all.
+
+Call sites in platform classes (`java.*`, `jdk.*`, `sun.*`) are left alone. The JDK concatenates
+constantly — logging, formatting, exception messages, class loading — and none of it is a place a
+customer's injection is written. Wrapping those sites measured as more overhead than every other hook
+combined, for no detection whatsoever.
+
 ### 3.3 Context propagation
 
 Request context must follow the request across threads, executors, and async boundaries — otherwise
@@ -103,7 +124,7 @@ taint is lost at the first `CompletableFuture` and the product silently under-re
 
 | Runtime | Mechanism |
 |---|---|
-| JVM | `ThreadLocal` + instrumentation of `Executor.execute`, `ForkJoinTask`, `CompletableFuture`, Reactor/RxJava hooks |
+| JVM | Single per-thread state holder + instrumentation of `Executor.execute` and `submit(Runnable\|Callable)`. `CompletableFuture`, Reactor and RxJava hooks are **not yet implemented** |
 | .NET | `AsyncLocal<T>` — flows across `await` natively |
 | Node.js | `AsyncLocalStorage` over `async_hooks` |
 | Python | `contextvars` — flows into `asyncio` tasks; explicit copy for thread pools |
@@ -114,7 +135,9 @@ taint is lost at the first `CompletableFuture` and the product silently under-re
 Taint metadata cannot live on the value itself for immutable built-ins. Each runtime uses a
 **bounded, weakly-referenced side table** keyed by object identity:
 
-- JVM: `WeakConcurrentMap` with identity keys, LRU-capped per request, cleared at request end.
+- JVM: identity-keyed table, capped per request, cleared at request end. Identity, not equality —
+  two equal strings are not the same value, and conflating them would attribute one request's taint to
+  another's data, reporting every query that happens to contain a word a user typed.
 - Node/Python: `WeakMap` / `WeakValueDictionary` with the same request-scoped teardown.
 
 Hard rules: the table is capped (default 10,000 entries per request); on overflow the agent stops

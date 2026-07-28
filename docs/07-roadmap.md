@@ -108,26 +108,43 @@ Notes from implementation worth carrying forward:
 
 - ✅ Bootstrap (`premain`), Byte Buddy transformer, bootstrap helper injection with a re-entrancy
   guard — the agent instruments `StringBuilder`, which it also uses itself.
-- ✅ Range-based taint engine with the propagator set for `String`, `StringBuilder`, formatting,
-  encoding, and per-rule-class sanitizer awareness (ADR-0007).
-- ✅ Sinks: JDBC (`Statement`, `PreparedStatement`), `Runtime.exec`, file APIs.
-- ✅ Redaction inside the customer process, bounded ring buffer, resource governor, fail-open hooks.
-- ✅ NDJSON-over-HTTP transport; protobuf contracts in `packages/proto`.
+- ✅ Range-based taint engine with per-rule-class sanitizer awareness (ADR-0007), propagating through
+  `String`, `StringBuilder`, and **`invokedynamic` string concatenation** — since Java 9 the `+`
+  operator compiles to a `StringConcatFactory` call site, which is how most Java injection is written.
+- ✅ HTTP entry point and sources for both servlet API generations: `getParameter`,
+  `getParameterValues`, `getHeader`, `getQueryString`, `getPathInfo`, `getRequestURI`,
+  `Cookie.getValue`. Spring's matched route pattern is read from the request attribute, so findings
+  group by route rather than by path.
+- ✅ Sinks: JDBC `Statement`, `Runtime.exec`, `java.io.File`.
+- ✅ Async context propagation across `Executor.execute` and `submit(Runnable|Callable)`.
+- ✅ Redaction in-process, bounded ring buffer, resource governor, fail-open hooks, per-request
+  finding deduplication.
+- ✅ Durable offline spool, retry backoff, TLS with SPKI certificate pinning.
 - ✅ `apps/gateway`: agent auth, schema validation, per-tenant quota, dedup, Kafka/file/memory sinks.
-- ✅ Verified end to end: a real SQL injection in a JVM → instrumentation → HTTP → authenticated
-  gateway → durable stream, with the tenant stamped from the token rather than the payload.
+- ✅ **Detection gate in CI:** a corpus of paired vulnerable and safe cases modelled on the OWASP
+  Benchmark categories, at 100% recall and 0% false positives, enforced by `CorpusIT`.
+- ✅ **Overhead gate in CI:** the same workload measured with and without the agent, enforced by
+  `OverheadIT`. Measured cost is ~30–60µs added per request depending on machine load.
 
-**Still open before the phase gate**
+**Still open before the exit criteria are met**
 
-- ⬜ Sources: Servlet, Spring MVC, Spring WebFlux, JAX-RS (the taint engine is source-agnostic; only
-  the entry-point hooks are missing).
-- ⬜ Context propagation across `Executor`, `ForkJoinPool`, `CompletableFuture`, Reactor.
-- ⬜ Agent-side offline spool; gRPC transport with mTLS and pinning.
-- ⬜ Benchmarks: < 5% CPU overhead on a Spring PetClinic load test, enforced in CI.
-- ⬜ WebGoat and OWASP Benchmark corpus.
+- ⬜ **The overhead criterion is not the one this measures.** The gate runs a synthetic Jetty + H2
+  workload whose requests cost ~250µs, where the agent's ~30–60µs reads as 11–26%. The same absolute
+  cost is under 1% of a realistic 10ms request, but "< 5% on Spring PetClinic" remains unverified
+  because PetClinic has not been run.
+- ⬜ **The corpus is ours, not OWASP's.** It is modelled on the Benchmark categories and covers three
+  rule classes. Running the actual WebGoat and OWASP Benchmark suites is the exit criterion and has
+  not been done.
+- ⬜ gRPC transport (see ADR-0010 — the bootstrap loader confines the agent runtime to `java.base`,
+  which makes gRPC a restructuring rather than an addition).
+- ⬜ Sources for non-servlet stacks: Spring WebFlux, JAX-RS outside a servlet container.
+- ⬜ Context propagation through `CompletableFuture` chains and Reactor.
+- ⬜ Request-body taint tracking. Currently reported as a coverage gap rather than silently missed.
 
 **Exit criteria:** WebGoat and OWASP Benchmark runs produce the expected true positives with zero false
-positives on the sanitized control set; overhead budget met; agent survives control-plane outage.
+positives on the sanitized control set; overhead budget met on PetClinic; agent survives control-plane
+outage (✅ — verified by `ServletIT`, which points the agent at a refused port and asserts the finding
+is on disk afterwards).
 
 ---
 

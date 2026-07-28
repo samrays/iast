@@ -1,6 +1,6 @@
 # ADR-0005: gRPC + protobuf agent transport, independently versioned from the control plane
 
-- **Status:** Accepted
+- **Status:** Accepted — transport choice amended for the JVM agent by [ADR-0010](0010-bootstrap-loader-constraint.md)
 - **Date:** 2026-07-27
 - **Deciders:** Platform architecture, Agent engineering, Security
 

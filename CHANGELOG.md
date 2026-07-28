@@ -97,10 +97,74 @@ tainted range   : (37, 10, 'name')
 - A failed agent install logged the reflection wrapper instead of the cause, making a
   bootstrap failure undiagnosable.
 
+### Added — the agent finds requests on its own
+
+- **HTTP entry point and sources.** `HttpServlet.service` opens and closes the request context;
+  `getParameter`, `getParameterValues`, `getHeader`, `getQueryString`, `getPathInfo`,
+  `getRequestURI` and `Cookie.getValue` are sources. Both the `jakarta` and `javax` API
+  generations. Nothing names a servlet type at compile time — the instrumented classes live on
+  the application's loader while the runtime they call lives on bootstrap, so matching is by name
+  and reading is by reflection, cached per concrete request class in a `ClassValue`.
+- **`invokedynamic` string concatenation.** Since Java 9, `a + b` compiles to a
+  `StringConcatFactory` call site, not to `StringBuilder`. The agent rewrites the call site when
+  it links, so the most common shape of SQL injection in Java is tracked. Offsets come from the
+  concat recipe, not from searching the result — searching would attribute a repeated value's
+  taint to whichever copy came first.
+- **Async context propagation** across `Executor.execute` and `submit(Runnable|Callable)`.
+- **`java.io.File` as the path-traversal sink**, at construction rather than at open: the stack
+  there names the line a developer has to change.
+- **Durable offline spool**, bounded and segmented, so a control-plane outage on our side does not
+  become a blind spot on the customer's. Retry backs off on failure and snaps back on recovery.
+- **TLS certificate pinning** over the SHA-256 SubjectPublicKeyInfo, matching anywhere in the
+  chain so a leaf can rotate without a fleet-wide agent update. Pinning adds to path validation
+  rather than replacing it, and a pinned agent refuses to send over plaintext rather than
+  downgrade.
+- **Per-request finding deduplication** on rule plus stack fingerprint. One vulnerable line hit in
+  a loop is one defect, not a thousand.
+- **Route discovery**, announced once per route rather than once per request.
+
+### Added — two gates in CI
+
+- **Detection.** A corpus of paired vulnerable and safe cases modelled on the OWASP Benchmark
+  categories, driven over real HTTP through a real servlet container: **6/6 defects found across
+  SQL injection, command injection and path traversal, 0/6 false positives**. Writing it
+  immediately exposed three misses, all the `invokedynamic` gap above — which is the argument for
+  having it.
+- **Overhead.** The same workload with and without `-javaagent`, failing the build past a ceiling.
+
+### Fixed during implementation
+
+- `StringBuilder.append`'s hook called `toString()` to learn the builder's length, allocating a
+  String and copying the buffer on **every append in the process**, making long-string assembly
+  quadratic.
+- Every hook did two `ThreadLocal` lookups, one for the re-entrancy guard and one for the request
+  context, on a path that runs for every concatenation in the process. Collapsed into one.
+- The propagation hooks now return on an empty taint table before doing two identity lookups that
+  were always going to miss.
+
+  Together those took the agent's added cost from ~64µs to ~28µs per request.
+
+- Skipping concatenation call sites in `dev.aegis.` classes — added so the agent would not
+  instrument itself — silently excluded the test fixtures, which shared that namespace, and three
+  defects went undetected. Caught by the corpus. The fixtures now live in `com.example.*`, which
+  is what a customer's application looks like anyway.
+
+### Known and measured, not claimed away
+
+- **Overhead is ~30–60µs added per request.** On the synthetic workload, whose requests cost
+  ~250µs, that reads as 11–26%. The same absolute cost is under 1% of a realistic 10ms request.
+  The roadmap's "< 5% on Spring PetClinic" is **not verified** — PetClinic has not been run.
+- **The corpus is ours, not OWASP's.** WebGoat and the real OWASP Benchmark have not been run;
+  they are the actual exit criterion.
+- **Request bodies are not tracked.** Reading one is reported as a coverage gap, because an
+  application with poor coverage and no findings must read as unknown, never as secure (ADR-0007).
+
 ### Still open in Phase 4
 
-- Servlet/Spring source instrumentation, agent-side offline spool, gRPC transport, JMH
-  overhead benchmarks and the WebGoat/OWASP-Benchmark corpus.
+- gRPC transport. See **ADR-0010**: bootstrap-published code may depend on `java.base` and nothing
+  else, which makes gRPC a restructuring of the reporting path rather than an addition to it.
+- Spring WebFlux and non-servlet JAX-RS sources; `CompletableFuture` and Reactor propagation.
+- WebGoat and OWASP Benchmark corpora; a PetClinic overhead run.
 
 ## [0.3.0] — 2026-07-28
 

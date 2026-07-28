@@ -269,7 +269,10 @@ jobs:
       - name: Verify
         working-directory: agents/runtime/java-agent
         # `verify`, not `test`: the JDK-core instrumentation can only be exercised against the
-        # packaged jar, because bootstrap injection needs a real jar file.
+        # packaged jar, because bootstrap injection needs a real jar file. This is also where
+        # both Phase 4 gates run — CorpusIT (100% recall, zero false positives) and OverheadIT
+        # (instrumentation cost against a budget). Raise aegis.overhead.max.percent if a runner
+        # is too contended to measure; do not delete the gate.
         run: mvn -B verify
       - uses: actions/upload-artifact@v4
         with:

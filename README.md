@@ -39,7 +39,7 @@ apps/
   worker/       Celery workers — correlation, scoring, AI pipelines, reporting     [Phase 5]
   dashboard/    Next.js 15 console — inventory, fleet, RBAC, audit                 [Phase 3 ✅]
 agents/runtime/
-  java-agent/   JVM agent — bytecode instrumentation (Byte Buddy)                  [Phase 4 ✅]
+  java-agent/   JVM agent — bytecode instrumentation (Byte Buddy)                  [Phase 4 🚧]
   dotnet-agent/ CLR profiler + Harmony patching                                    [Phase 6]
   node-agent/   Module hooking + async_hooks context propagation                   [Phase 6]
   python-agent/ sys.monitoring + import hooks                                      [Phase 6]
