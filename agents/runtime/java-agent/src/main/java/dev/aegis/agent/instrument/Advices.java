@@ -17,6 +17,74 @@ public final class Advices {
 
     private Advices() {}
 
+    // --- HTTP entry point and sources ------------------------------------------------------
+
+    /**
+     * {@code HttpServlet.service(...)} — the boundary of one request.
+     *
+     * <p>Opens the request context on the way in and closes it on the way out, including when
+     * the application throws. Everything downstream — every source, every propagation step,
+     * every sink evaluation — is scoped to the context this pair creates.
+     */
+    public static final class HttpEntry {
+        private HttpEntry() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static boolean enter(@Advice.Argument(0) Object request) {
+            return AgentRuntime.onRequestEnter(request);
+        }
+
+        /**
+         * {@code onThrowable} matters as much as the normal path: a servlet that throws still
+         * has to release its taint table, or the next request on that pooled thread inherits
+         * it.
+         */
+        @Advice.OnMethodExit(suppress = Throwable.class, onThrowable = Throwable.class)
+        public static void exit(@Advice.Enter boolean owner, @Advice.Argument(0) Object request) {
+            AgentRuntime.onRequestExit(owner, request);
+        }
+    }
+
+    /**
+     * {@code ServletRequest.getParameter/getHeader/getQueryString/...} — where attacker data
+     * enters.
+     *
+     * <p>One advice for the whole family, dispatched on the method name. Each distinct advice
+     * class is a distinct block of bytecode pasted into a container class that runs on every
+     * request; sharing one keeps that footprint small.
+     */
+    public static final class HttpStringSource {
+        private HttpStringSource() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.Origin("#m") String accessor,
+                @Advice.AllArguments Object[] arguments,
+                @Advice.Return Object result) {
+            AgentRuntime.onHttpSource(accessor, arguments, result);
+        }
+    }
+
+    /** {@code Cookie.getValue()}. */
+    public static final class CookieValue {
+        private CookieValue() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(@Advice.This Object cookie, @Advice.Return String value) {
+            AgentRuntime.onCookieValue(cookie, value);
+        }
+    }
+
+    /** {@code ServletRequest.getInputStream/getReader} — a blind spot, reported as one. */
+    public static final class RequestBodyAccess {
+        private RequestBodyAccess() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(@Advice.Origin("#m") String accessor) {
+            AgentRuntime.onRequestBodyAccess(accessor);
+        }
+    }
+
     // --- propagators --------------------------------------------------------------------
 
     /** {@code String.concat(String)}. */
@@ -141,6 +209,24 @@ public final class Advices {
         @Advice.OnMethodEnter(suppress = Throwable.class)
         public static void enter(
                 @Advice.Argument(value = 0, readOnly = false) Runnable task) {
+            task = AgentRuntime.wrapForHandoff(task);
+        }
+    }
+
+    /**
+     * {@code ExecutorService.submit(Callable)} and {@code ForkJoinPool.submit(Callable)}.
+     *
+     * <p>{@code AbstractExecutorService.submit} funnels through {@code execute}, so most pools
+     * are already covered by {@link ExecutorSubmit}. {@code ForkJoinPool} is the exception: it
+     * overrides {@code submit} and pushes straight onto a work queue, which is precisely the
+     * pool {@code CompletableFuture} and parallel streams use by default.
+     */
+    public static final class CallableSubmit {
+        private CallableSubmit() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(
+                @Advice.Argument(value = 0, readOnly = false) java.util.concurrent.Callable<?> task) {
             task = AgentRuntime.wrapForHandoff(task);
         }
     }

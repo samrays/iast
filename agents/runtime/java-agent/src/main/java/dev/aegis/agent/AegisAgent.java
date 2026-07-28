@@ -118,6 +118,22 @@ public final class AegisAgent {
                 1_000L);
     }
 
+    /**
+     * Types whose {@code execute}/{@code submit} carry work to another thread.
+     *
+     * <p>Named explicitly, because matching every implementation of {@code Executor} means
+     * resolving the supertype hierarchy of every class the application loads — which is how an
+     * agent turns a 4-second startup into a 40-second one. These four cover the JDK pools, and
+     * {@code ThreadPoolExecutor} covers everything built on it, including
+     * {@code Executors.newFixedThreadPool} and Spring's task executors.
+     */
+    private static final String[] EXECUTOR_TYPES = {
+        "java.util.concurrent.ThreadPoolExecutor",
+        "java.util.concurrent.ForkJoinPool",
+        "java.util.concurrent.ScheduledThreadPoolExecutor",
+        "java.util.concurrent.AbstractExecutorService",
+    };
+
     static void installTransformers(Instrumentation instrumentation) {
         AgentBuilder builder =
                 new AgentBuilder.Default()
@@ -225,7 +241,137 @@ public final class AegisAgent {
                                                                                                 String
                                                                                                         .class)))));
 
+        builder = installHttpTransformers(builder);
+        builder = installAsyncTransformers(builder);
+
         builder.installOn(instrumentation);
+    }
+
+    /**
+     * HTTP entry point and sources, for both servlet API generations.
+     *
+     * <p>Nothing here names a servlet type at compile time. The agent must run against
+     * {@code jakarta.servlet} and {@code javax.servlet} alike, and — more fundamentally — the
+     * advice targets are on the application's class loader while the runtime it calls is on
+     * bootstrap, so matching is by name and reading is by reflection.
+     */
+    private static AgentBuilder installHttpTransformers(AgentBuilder builder) {
+        // The abstract base class every servlet extends. Matching it by exact name costs
+        // nothing at class-load time, unlike walking the hierarchy of every loaded class to
+        // ask whether it implements Servlet.
+        builder =
+                builder.type(
+                                ElementMatchers.namedOneOf(
+                                        "jakarta.servlet.http.HttpServlet",
+                                        "javax.servlet.http.HttpServlet"))
+                        .transform(
+                                (b, type, loader, module, pd) ->
+                                        b.visit(
+                                                net.bytebuddy.asm.Advice.to(Advices.HttpEntry.class)
+                                                        .on(
+                                                                ElementMatchers.named("service")
+                                                                        .and(
+                                                                                ElementMatchers
+                                                                                        .takesArguments(
+                                                                                                2)))));
+
+        // Request implementations, on the other hand, have no single base type: Tomcat's
+        // RequestFacade, Jetty's Request and every framework wrapper are unrelated classes
+        // sharing only the interface. The name pre-filter keeps the expensive hierarchy walk
+        // off the 99% of classes that could not possibly be one.
+        net.bytebuddy.matcher.ElementMatcher.Junction<TypeDescription> servletRequest =
+                ElementMatchers.<TypeDescription>nameContains("Request")
+                        .and(
+                                ElementMatchers.hasSuperType(
+                                        ElementMatchers.namedOneOf(
+                                                "jakarta.servlet.ServletRequest",
+                                                "javax.servlet.ServletRequest")));
+
+        builder =
+                builder.type(servletRequest)
+                        .transform(
+                                (b, type, loader, module, pd) ->
+                                        b.visit(
+                                                        net.bytebuddy.asm.Advice.to(
+                                                                        Advices.HttpStringSource
+                                                                                .class)
+                                                                .on(
+                                                                        ElementMatchers.namedOneOf(
+                                                                                        "getParameter",
+                                                                                        "getParameterValues",
+                                                                                        "getHeader",
+                                                                                        "getQueryString",
+                                                                                        "getPathInfo",
+                                                                                        "getPathTranslated",
+                                                                                        "getRequestURI")
+                                                                                .and(
+                                                                                        ElementMatchers
+                                                                                                .isPublic())))
+                                                .visit(
+                                                        net.bytebuddy.asm.Advice.to(
+                                                                        Advices.RequestBodyAccess
+                                                                                .class)
+                                                                .on(
+                                                                        ElementMatchers.namedOneOf(
+                                                                                        "getInputStream",
+                                                                                        "getReader")
+                                                                                .and(
+                                                                                        ElementMatchers
+                                                                                                .isPublic()))));
+
+        builder =
+                builder.type(
+                                ElementMatchers.namedOneOf(
+                                        "jakarta.servlet.http.Cookie", "javax.servlet.http.Cookie"))
+                        .transform(
+                                (b, type, loader, module, pd) ->
+                                        b.visit(
+                                                net.bytebuddy.asm.Advice.to(
+                                                                Advices.CookieValue.class)
+                                                        .on(
+                                                                ElementMatchers.named("getValue")
+                                                                        .and(
+                                                                                ElementMatchers
+                                                                                        .takesNoArguments()))));
+        return builder;
+    }
+
+    /**
+     * Carry the request context across thread hand-offs.
+     *
+     * <p>Without this, taint dies at the first {@code executor.submit(...)} and the agent
+     * silently under-reports on exactly the asynchronous codebases that most need checking —
+     * the worst kind of failure for a security tool, because the output still looks clean.
+     */
+    private static AgentBuilder installAsyncTransformers(AgentBuilder builder) {
+        return builder.type(ElementMatchers.namedOneOf(EXECUTOR_TYPES))
+                .transform(
+                        (b, type, loader, module, pd) ->
+                                b.visit(
+                                                net.bytebuddy.asm.Advice.to(
+                                                                Advices.ExecutorSubmit.class)
+                                                        .on(
+                                                                ElementMatchers.namedOneOf(
+                                                                                "execute", "submit")
+                                                                        .and(
+                                                                                ElementMatchers
+                                                                                        .takesArgument(
+                                                                                                0,
+                                                                                                Runnable
+                                                                                                        .class))))
+                                        .visit(
+                                                net.bytebuddy.asm.Advice.to(
+                                                                Advices.CallableSubmit.class)
+                                                        .on(
+                                                                ElementMatchers.named("submit")
+                                                                        .and(
+                                                                                ElementMatchers
+                                                                                        .takesArgument(
+                                                                                                0,
+                                                                                                java.util
+                                                                                                        .concurrent
+                                                                                                        .Callable
+                                                                                                        .class)))));
     }
 
     /**

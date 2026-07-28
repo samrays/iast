@@ -16,8 +16,20 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class Reporter {
 
+    /** Ceiling on remembered routes and coverage gaps. */
+    static final int MAX_ANNOUNCED = 4_096;
+
     private final BoundedRingBuffer<RuntimeEvent> buffer;
     private final AtomicLong sequence = new AtomicLong();
+
+    /**
+     * Facts already sent, so they are not sent again.
+     *
+     * <p>Concurrent because every request thread announces into it, and {@code add} returning
+     * false is the deduplication — no lock, one atomic operation on a path that would otherwise
+     * need one.
+     */
+    private final java.util.Set<String> announced = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public Reporter(int capacity) {
         this.buffer = new BoundedRingBuffer<>(capacity);
@@ -34,8 +46,18 @@ public final class Reporter {
         buffer.offer(RuntimeEvent.taintHit(nextEventId(), finding, context));
     }
 
-    /** Queue a discovered route, for API inventory. */
+    /**
+     * Queue a discovered route, for API inventory.
+     *
+     * <p>Emitted once per distinct route rather than once per request. A busy service handles
+     * the same twenty routes millions of times a day; sending that as twenty million identical
+     * events would drown the tenant's own findings in its ingest quota to tell the control
+     * plane something it learned in the first second.
+     */
     public void reportRoute(String method, String pathTemplate, boolean authenticated) {
+        if (!firstSighting("route|" + method + "|" + pathTemplate + "|" + authenticated)) {
+            return;
+        }
         buffer.offer(RuntimeEvent.route(nextEventId(), method, pathTemplate, authenticated));
     }
 
@@ -46,7 +68,25 @@ public final class Reporter {
      * zero findings must read as <em>unknown</em>, never as <em>secure</em> (ADR-0007).
      */
     public void reportCoverageGap(String reason, String component) {
+        if (!firstSighting("gap|" + component + "|" + reason)) {
+            return;
+        }
         buffer.offer(RuntimeEvent.coverageGap(nextEventId(), reason, component));
+    }
+
+    /**
+     * True the first time this key is seen.
+     *
+     * <p>Bounded, and it stops recording rather than evicting once full. Eviction would let a
+     * pathological application — one that mints a distinct route per request id, say — cycle
+     * the set forever and re-emit everything, which is the exact flood this exists to prevent.
+     * Stopping instead costs a little inventory completeness and cannot cost availability.
+     */
+    private boolean firstSighting(String key) {
+        if (announced.size() >= MAX_ANNOUNCED) {
+            return false;
+        }
+        return announced.add(key);
     }
 
     /** Drain a batch for transmission. Called only by the reporting thread. */

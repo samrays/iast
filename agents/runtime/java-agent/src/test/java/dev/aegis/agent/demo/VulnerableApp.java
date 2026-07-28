@@ -5,11 +5,6 @@ import dev.aegis.agent.runtime.RequestContext;
 import dev.aegis.agent.taint.SourceKind;
 import java.sql.Connection;
 import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -25,10 +20,7 @@ public final class VulnerableApp {
         try (Connection connection =
                 DriverManager.getConnection("jdbc:h2:mem:demo;DB_CLOSE_DELAY=-1", "sa", "")) {
 
-            try (Statement setup = connection.createStatement()) {
-                setup.execute("CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(64))");
-                setup.execute("INSERT INTO users VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')");
-            }
+            UserRepository.seed(connection);
 
             UserRepository repository = new UserRepository(connection);
 
@@ -68,44 +60,5 @@ public final class VulnerableApp {
         }
         // Give the reporting thread a moment; the shutdown hook flushes whatever remains.
         Thread.sleep(1_500);
-    }
-
-    /** Ordinary application code, written the way vulnerable code is actually written. */
-    static final class UserRepository {
-        private final Connection connection;
-
-        UserRepository(Connection connection) {
-            this.connection = connection;
-        }
-
-        List<String> findByNameUnsafe(String name) throws SQLException {
-            StringBuilder sql = new StringBuilder();
-            sql.append("SELECT name FROM users WHERE name = '");
-            sql.append(name);
-            sql.append("'");
-
-            List<String> results = new ArrayList<>();
-            try (Statement statement = connection.createStatement();
-                    ResultSet rows = statement.executeQuery(sql.toString())) {
-                while (rows.next()) {
-                    results.add(rows.getString(1));
-                }
-            }
-            return results;
-        }
-
-        List<String> findByNameSafe(String name) throws SQLException {
-            List<String> results = new ArrayList<>();
-            try (PreparedStatement statement =
-                    connection.prepareStatement("SELECT name FROM users WHERE name = ?")) {
-                statement.setString(1, name);
-                try (ResultSet rows = statement.executeQuery()) {
-                    while (rows.next()) {
-                        results.add(rows.getString(1));
-                    }
-                }
-            }
-            return results;
-        }
     }
 }

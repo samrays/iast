@@ -21,6 +21,13 @@
     <bytebuddy.version>1.14.18</bytebuddy.version>
     <junit.version>5.10.2</junit.version>
     <h2.version>2.2.224</h2.version>
+    <!--
+      Jetty 11 is the last line that targets Java 17 with the jakarta.servlet 5 API. It is a
+      test dependency only: the agent never compiles against a servlet API, because the classes
+      it instruments live on the application's loader while the runtime they call lives on
+      bootstrap, so all servlet matching is by name and all reading is by reflection.
+    -->
+    <jetty.version>11.0.20</jetty.version>
   </properties>
 
   <dependencies>
@@ -52,6 +59,19 @@
       <groupId>com.h2database</groupId>
       <artifactId>h2</artifactId>
       <version>${h2.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <!--
+      A real servlet container, for the same reason. Servlet instrumentation is exactly the
+      kind of code that passes against a hand-written stub and fails against Tomcat, because
+      what actually matters — that the request object is a container facade wrapping a
+      recycled instance, reached through an interface, on a pooled thread — is precisely what
+      a stub does not reproduce.
+    -->
+    <dependency>
+      <groupId>org.eclipse.jetty</groupId>
+      <artifactId>jetty-servlet</artifactId>
+      <version>${jetty.version}</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

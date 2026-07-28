@@ -176,7 +176,218 @@ public final class AgentRuntime {
         return findingsReported.get();
     }
 
+    // --- request lifecycle ---------------------------------------------------------------
+
+    /**
+     * An HTTP request is entering the application.
+     *
+     * @return true when this frame <em>created</em> the context and must therefore end it.
+     *     Servlet stacks nest — {@code HttpServlet.service} calls its own two-argument
+     *     overload, filters wrap servlets, and Spring's dispatcher is itself a servlet — so
+     *     only the outermost frame may open or close the context. An inner frame that called
+     *     {@code begin} again would discard the taint table mid-request and the finding would
+     *     vanish.
+     */
+    public static boolean onRequestEnter(Object request) {
+        AgentRuntime runtime = instance;
+        if (runtime == null || !enter()) {
+            return false;
+        }
+        try {
+            if (RequestContext.current() != null) {
+                return false;
+            }
+            if (runtime.governor.level() == dev.aegis.agent.runtime.ResourceGovernor.Level.UNINSTALLED) {
+                return false;
+            }
+            boolean sampled =
+                    runtime.governor.shouldSample(java.util.concurrent.ThreadLocalRandom.current());
+            RequestContext context = RequestContext.begin(newTraceId(), sampled);
+            dev.aegis.agent.runtime.HttpFacade.describe(request, context);
+
+            // The request URI is attacker-controlled and reaches path and redirect sinks, so it
+            // is a source in its own right — not merely evidence.
+            if (sampled && !context.path().isEmpty()) {
+                context.tracker()
+                        .trackSource(
+                                context.path(),
+                                dev.aegis.agent.taint.SourceKind.PATH,
+                                "request-uri");
+            }
+            return true;
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+            return false;
+        } finally {
+            exit();
+        }
+    }
+
+    /**
+     * The request is finishing, successfully or not.
+     *
+     * <p>Called from a {@code finally}, so an application exception cannot strand a taint table
+     * on a pooled container thread — which would leak memory and, far worse, carry one user's
+     * data into the next request served by that thread.
+     */
+    public static void onRequestExit(boolean owner, Object request) {
+        AgentRuntime runtime = instance;
+        if (runtime == null || !owner) {
+            return;
+        }
+        if (!enter()) {
+            return;
+        }
+        try {
+            RequestContext context = RequestContext.current();
+            if (context == null) {
+                return;
+            }
+            String template = dev.aegis.agent.runtime.HttpFacade.routeTemplate(request);
+            if (!template.isEmpty()) {
+                context.withRouteTemplate(template);
+            }
+            runtime.reporter.reportRoute(
+                    context.method(),
+                    context.routeTemplate(),
+                    dev.aegis.agent.runtime.HttpFacade.isAuthenticated(request));
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            // Unconditional: the whole point of this hook is that the table is always released.
+            RequestContext.end();
+            exit();
+        }
+    }
+
+    /** 128 bits of randomness as hex — enough to be unique without coordinating with anyone. */
+    private static String newTraceId() {
+        java.util.concurrent.ThreadLocalRandom random =
+                java.util.concurrent.ThreadLocalRandom.current();
+        return Long.toHexString(random.nextLong()) + Long.toHexString(random.nextLong());
+    }
+
     // --- source ------------------------------------------------------------------------
+
+    /**
+     * A servlet accessor returned attacker-controlled data.
+     *
+     * <p>One hook for every accessor rather than one per method: the advice is inlined into
+     * container code that runs on every request, so the fewer distinct shapes of bytecode
+     * pasted into a hot container class the better.
+     *
+     * @param accessor the method name, e.g. {@code getParameter}, which selects the source kind
+     * @param arguments the call's own arguments; the first, when a string, names the source
+     */
+    public static void onHttpSource(String accessor, Object[] arguments, Object result) {
+        AgentRuntime runtime = instance;
+        if (runtime == null || result == null || !enter()) {
+            return;
+        }
+        try {
+            if (!runtime.governor.level().allowsDataflow()) {
+                return;
+            }
+            RequestContext context = RequestContext.current();
+            if (context == null || !context.isSampled()) {
+                return;
+            }
+            dev.aegis.agent.taint.SourceKind kind = sourceKindOf(accessor);
+            if (kind == null) {
+                return;
+            }
+            String name =
+                    arguments != null && arguments.length > 0 && arguments[0] instanceof String key
+                            ? key
+                            : accessor;
+
+            if (result instanceof String value) {
+                context.tracker().trackSource(value, kind, name);
+                context.recordParameter(name, value);
+            } else if (result instanceof String[] values) {
+                for (String value : values) {
+                    context.tracker().trackSource(value, kind, name);
+                }
+                if (values.length > 0) {
+                    context.recordParameter(name, values[0]);
+                }
+            }
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            exit();
+        }
+    }
+
+    private static dev.aegis.agent.taint.SourceKind sourceKindOf(String accessor) {
+        if (accessor == null) {
+            return null;
+        }
+        return switch (accessor) {
+            case "getParameter", "getParameterValues" ->
+                    dev.aegis.agent.taint.SourceKind.PARAMETER;
+            case "getHeader" -> dev.aegis.agent.taint.SourceKind.HEADER;
+            case "getQueryString" -> dev.aegis.agent.taint.SourceKind.QUERY_STRING;
+            case "getPathInfo", "getRequestURI", "getPathTranslated" ->
+                    dev.aegis.agent.taint.SourceKind.PATH;
+            default -> null;
+        };
+    }
+
+    /** {@code Cookie.getValue()} — attacker-controlled, and named by its own cookie. */
+    public static void onCookieValue(Object cookie, String value) {
+        AgentRuntime runtime = instance;
+        if (runtime == null || value == null || value.isEmpty() || !enter()) {
+            return;
+        }
+        try {
+            if (!runtime.governor.level().allowsDataflow()) {
+                return;
+            }
+            RequestContext context = RequestContext.current();
+            if (context == null || !context.isSampled()) {
+                return;
+            }
+            context.tracker()
+                    .trackSource(
+                            value,
+                            dev.aegis.agent.taint.SourceKind.COOKIE,
+                            dev.aegis.agent.runtime.HttpFacade.cookieName(cookie));
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            exit();
+        }
+    }
+
+    /**
+     * The application read the request body as a stream.
+     *
+     * <p>The agent does not follow taint through the body: doing so means wrapping the
+     * container's stream, and a bug in that wrapper corrupts uploads in production. Rather
+     * than pretend the blind spot does not exist, it is reported — an application with poor
+     * instrumentation coverage and no findings must read as <em>unknown</em>, never as
+     * <em>secure</em> (ADR-0007).
+     */
+    public static void onRequestBodyAccess(String accessor) {
+        AgentRuntime runtime = instance;
+        if (runtime == null || !enter()) {
+            return;
+        }
+        try {
+            RequestContext context = RequestContext.current();
+            if (context == null) {
+                return;
+            }
+            runtime.reporter.reportCoverageGap(
+                    "request body read via " + accessor + "; taint not tracked through the stream",
+                    "servlet-request-body");
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            exit();
+        }
+    }
 
     /** Mark a value returned by a source as attacker-controllable. */
     public static void onSource(
@@ -300,6 +511,43 @@ public final class AgentRuntime {
                     task.run();
                 } finally {
                     // Detach, never end: the originating thread still owns the taint table.
+                    RequestContext.detach();
+                }
+            };
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+            return task;
+        } finally {
+            exit();
+        }
+    }
+
+    /**
+     * The {@link java.util.concurrent.Callable} counterpart of {@link #wrapForHandoff(Runnable)}.
+     *
+     * <p>Kept as a separate overload rather than one {@code Object} method because the advice
+     * assigns the result straight back into the instrumented method's own argument slot, which
+     * has to type-check against the real parameter type.
+     */
+    public static <T> java.util.concurrent.Callable<T> wrapForHandoff(
+            java.util.concurrent.Callable<T> task) {
+        AgentRuntime runtime = instance;
+        if (runtime == null || task == null) {
+            return task;
+        }
+        if (!enter()) {
+            return task;
+        }
+        try {
+            RequestContext context = RequestContext.current();
+            if (context == null) {
+                return task;
+            }
+            return () -> {
+                RequestContext.adopt(context);
+                try {
+                    return task.call();
+                } finally {
                     RequestContext.detach();
                 }
             };
