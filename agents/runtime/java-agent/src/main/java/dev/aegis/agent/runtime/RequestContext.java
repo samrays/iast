@@ -17,6 +17,12 @@ public final class RequestContext {
 
     private static final ThreadLocal<RequestContext> CURRENT = new ThreadLocal<>();
 
+    /** Ceiling on distinct defects reported per request. */
+    static final int MAX_REPORTED_PER_REQUEST = 256;
+
+    private final java.util.Set<String> reported =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     private final TaintTracker tracker = new TaintTracker();
     private final String traceId;
     private final long startedAtNanos = System.nanoTime();
@@ -117,6 +123,24 @@ public final class RequestContext {
 
     public void recordBodyExcerpt(String excerpt) {
         this.bodyExcerpt = excerpt == null ? "" : excerpt;
+    }
+
+    /**
+     * True the first time this defect is seen in this request.
+     *
+     * <p>One line of vulnerable code hit in a loop is one defect, not a thousand. Without this,
+     * a query inside a {@code for} would emit a finding per iteration, and a single JDK entry
+     * point that delegates to an overload of itself — {@code Runtime.exec(String)} calling
+     * {@code exec(String, String[])} — would report twice for one call. Both produce noise a
+     * developer learns to ignore, which is how a security tool stops being used.
+     *
+     * <p>Concurrent because {@link #adopt} deliberately shares a context across threads.
+     */
+    public boolean firstReport(String key) {
+        if (reported.size() >= MAX_REPORTED_PER_REQUEST) {
+            return false;
+        }
+        return reported.add(key);
     }
 
     public String method() {

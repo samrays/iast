@@ -124,6 +124,35 @@ public final class Advices {
         }
     }
 
+    /**
+     * {@code StringConcatFactory.makeConcatWithConstants(...)} — the bootstrap for {@code +}.
+     *
+     * <p>Since Java 9, {@code "a" + b} is an {@code invokedynamic}, not a {@code StringBuilder}.
+     * Rewriting the call site here — once, when it links — is the only way to see the most
+     * common shape of injection in the language.
+     */
+    public static final class ConcatFactoryWithConstants {
+        private ConcatFactoryWithConstants() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.Argument(3) String recipe,
+                @Advice.Argument(4) Object[] constants,
+                @Advice.Return(readOnly = false) java.lang.invoke.CallSite site) {
+            site = AgentRuntime.wrapConcat(site, recipe, constants);
+        }
+    }
+
+    /** {@code StringConcatFactory.makeConcat(...)} — the same, with no interleaved constants. */
+    public static final class ConcatFactory {
+        private ConcatFactory() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(@Advice.Return(readOnly = false) java.lang.invoke.CallSite site) {
+            site = AgentRuntime.wrapConcat(site, null, null);
+        }
+    }
+
     /** {@code StringBuilder.toString()} — materializes the builder's accumulated taint. */
     public static final class BuilderToString {
         private BuilderToString() {}

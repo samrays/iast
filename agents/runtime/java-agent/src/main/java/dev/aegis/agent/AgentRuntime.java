@@ -499,6 +499,188 @@ public final class AgentRuntime {
         }
     }
 
+    // --- invokedynamic string concatenation ------------------------------------------------
+
+    /** Placeholder in a {@code StringConcatFactory} recipe for a dynamic argument. */
+    private static final char RECIPE_ARGUMENT = '\u0001';
+
+    /** Placeholder for a constant supplied alongside the recipe. */
+    private static final char RECIPE_CONSTANT = '\u0002';
+
+    /** Refuse to rewrite absurdly wide call sites rather than pay for them on every execution. */
+    private static final int MAX_CONCAT_ARGUMENTS = 128;
+
+    private static final java.lang.invoke.MethodHandle CONCAT_TRACKER = findConcatTracker();
+
+    private static java.lang.invoke.MethodHandle findConcatTracker() {
+        try {
+            return java.lang.invoke.MethodHandles.lookup()
+                    .findStatic(
+                            AgentRuntime.class,
+                            "concatWithTracking",
+                            java.lang.invoke.MethodType.methodType(
+                                    Object.class,
+                                    java.lang.invoke.MethodHandle.class,
+                                    String.class,
+                                    Object[].class,
+                                    Object[].class));
+        } catch (ReflectiveOperationException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Rewrite a string-concatenation call site so the agent sees the result.
+     *
+     * <p>Since Java 9, {@code "a" + b} does not compile to {@code StringBuilder}. It compiles
+     * to an {@code invokedynamic} that asks {@link java.lang.invoke.StringConcatFactory} to
+     * spin a bespoke method handle. An agent that instruments only {@code StringBuilder}
+     * therefore misses the single most common way SQL injection is written in Java — and
+     * misses it silently, which is far worse than missing it loudly.
+     *
+     * <p>The rewrite happens once, when the call site links, not on every concatenation. What
+     * runs afterwards is the original handle plus one call into the tracker.
+     *
+     * @param recipe the layout string, or null for the constant-free {@code makeConcat} form
+     * @param constants values the recipe interleaves between the dynamic arguments
+     */
+    public static java.lang.invoke.CallSite wrapConcat(
+            java.lang.invoke.CallSite site, String recipe, Object[] constants) {
+        if (instance == null || site == null || CONCAT_TRACKER == null) {
+            return site;
+        }
+        if (!enter()) {
+            // The agent's own code concatenates strings. Rewriting a call site while already
+            // inside the agent risks recursion during linkage, and the sites we would lose are
+            // ours, not the application's.
+            return site;
+        }
+        try {
+            java.lang.invoke.MethodHandle target = site.getTarget();
+            java.lang.invoke.MethodType type = target.type();
+            int arity = type.parameterCount();
+            if (type.returnType() != String.class || arity == 0 || arity > MAX_CONCAT_ARGUMENTS) {
+                return site;
+            }
+
+            // Generalize to all-Object so primitive arguments box cleanly on the way through
+            // the spreader; asType puts the exact signature back at the end.
+            java.lang.invoke.MethodHandle spread =
+                    target.asType(type.generic()).asSpreader(Object[].class, arity);
+            java.lang.invoke.MethodHandle bound =
+                    java.lang.invoke.MethodHandles.insertArguments(
+                            CONCAT_TRACKER,
+                            0,
+                            spread,
+                            recipe == null ? defaultRecipe(arity) : recipe,
+                            constants == null ? new Object[0] : constants);
+            return new java.lang.invoke.ConstantCallSite(
+                    bound.asCollector(Object[].class, arity).asType(type));
+        } catch (Throwable t) {
+            instance.hookFailed(t);
+            // An un-rewritten call site is a coverage gap. A broken one is a broken application.
+            return site;
+        } finally {
+            exit();
+        }
+    }
+
+    private static String defaultRecipe(int arity) {
+        return String.valueOf(RECIPE_ARGUMENT).repeat(arity);
+    }
+
+    /**
+     * Runs in place of the original concatenation handle.
+     *
+     * <p>Called on the application's thread for every {@code +} it executes, so the fast path
+     * matters: the original handle first, then one guarded call that returns almost immediately
+     * when there is no request in flight.
+     */
+    public static Object concatWithTracking(
+            java.lang.invoke.MethodHandle target,
+            String recipe,
+            Object[] constants,
+            Object[] arguments)
+            throws Throwable {
+        Object result = target.invoke(arguments);
+        if (result instanceof String text) {
+            onIndyConcat(text, recipe, constants, arguments);
+        }
+        return result;
+    }
+
+    /**
+     * Reconstruct where each argument landed in the result and propagate its taint.
+     *
+     * <p>Offsets come from the recipe rather than from searching the result for each argument.
+     * Searching would be both slower and wrong: a value appearing twice would attribute the
+     * taint to whichever copy came first.
+     */
+    private static void onIndyConcat(
+            String result, String recipe, Object[] constants, Object[] arguments) {
+        AgentRuntime runtime = instance;
+        if (runtime == null || !enter()) {
+            return;
+        }
+        try {
+            if (!runtime.governor.level().allowsDataflow()) {
+                return;
+            }
+            RequestContext context = RequestContext.current();
+            if (context == null || !context.isSampled()) {
+                return;
+            }
+            TaintTracker tracker = context.tracker();
+
+            boolean anyTainted = false;
+            for (Object argument : arguments) {
+                if (tracker.taintOf(argument).isTainted()) {
+                    anyTainted = true;
+                    break;
+                }
+            }
+            if (!anyTainted) {
+                return;
+            }
+
+            TaintedValue accumulated = TaintedValue.empty();
+            int offset = 0;
+            int argumentIndex = 0;
+            int constantIndex = 0;
+
+            for (int position = 0; position < recipe.length(); position++) {
+                char marker = recipe.charAt(position);
+                if (marker == RECIPE_ARGUMENT) {
+                    if (argumentIndex >= arguments.length) {
+                        return;
+                    }
+                    Object argument = arguments[argumentIndex++];
+                    TaintedValue taint = tracker.taintOf(argument);
+                    accumulated = TaintedValue.concat(accumulated, offset, taint);
+                    offset += String.valueOf(argument).length();
+                } else if (marker == RECIPE_CONSTANT) {
+                    if (constantIndex >= constants.length) {
+                        return;
+                    }
+                    offset += String.valueOf(constants[constantIndex++]).length();
+                } else {
+                    offset++;
+                }
+            }
+
+            // If the reconstruction disagrees with reality the offsets are meaningless, and a
+            // finding pointing at the wrong characters is worse than no finding at all.
+            if (offset != result.length()) {
+                return;
+            }
+            tracker.track(result, accumulated);
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            exit();
+        }
+    }
+
     /**
      * {@code StringBuilder.append(x)} — the builder itself carries the accumulated taint.
      *
@@ -732,7 +914,11 @@ public final class AgentRuntime {
                             // Skip this frame and the advice frame; the caller is what matters.
                             new Throwable().getStackTrace(),
                             AttackSignatures.looksMalicious(value, rule));
-            if (finding != null) {
+            // Reported once per defect per request. The finding is still returned either way,
+            // because blocking mode has to act on every occurrence, not just the first.
+            if (finding != null
+                    && context.firstReport(
+                            finding.rule().key() + "|" + finding.stackFingerprint())) {
                 runtime.findingsReported.incrementAndGet();
                 runtime.reporter.report(finding, context);
             }

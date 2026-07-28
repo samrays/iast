@@ -220,6 +220,46 @@ public final class AegisAgent {
                                                                                                 String
                                                                                                         .class)))));
 
+        // The `+` operator. Instrumenting the factory that links the call site costs nothing
+        // per concatenation — the rewrite happens once, when the site links — and without it
+        // the agent misses every injection written the way most Java is written.
+        builder =
+                builder.type(ElementMatchers.named("java.lang.invoke.StringConcatFactory"))
+                        .transform(
+                                (b, type, loader, module, pd) ->
+                                        b.visit(
+                                                        net.bytebuddy.asm.Advice.to(
+                                                                        Advices
+                                                                                .ConcatFactoryWithConstants
+                                                                                .class)
+                                                                .on(
+                                                                        ElementMatchers.named(
+                                                                                "makeConcatWithConstants")))
+                                                .visit(
+                                                        net.bytebuddy.asm.Advice.to(
+                                                                        Advices.ConcatFactory.class)
+                                                                .on(
+                                                                        ElementMatchers.named(
+                                                                                "makeConcat"))));
+
+        // Path traversal. The constructor is the sink rather than the later read: by the time
+        // anything is opened the path has usually been passed around, and the stack trace at
+        // construction is the one that names the line a developer has to change.
+        builder =
+                builder.type(ElementMatchers.named("java.io.File"))
+                        .transform(
+                                (b, type, loader, module, pd) ->
+                                        b.visit(
+                                                net.bytebuddy.asm.Advice.to(Advices.FileAccess.class)
+                                                        .on(
+                                                                ElementMatchers.isConstructor()
+                                                                        .and(
+                                                                                ElementMatchers
+                                                                                        .takesArgument(
+                                                                                                0,
+                                                                                                String
+                                                                                                        .class)))));
+
         builder = installHttpTransformers(builder);
         builder = installAsyncTransformers(builder);
 
