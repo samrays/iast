@@ -74,6 +74,18 @@
       <version>${jetty.version}</version>
       <scope>test</scope>
     </dependency>
+    <!--
+      A real HTML escaper, so the corpus can prove that sanitizer recognition works rather than
+      asserting it. The agent matches this library by name and never depends on it: a customer
+      reaches for whichever encoder their stack ships, and recognising it is worth nothing if it
+      has never been exercised against the actual implementation.
+    -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-text</artifactId>
+      <version>1.12.0</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

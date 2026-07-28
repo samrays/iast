@@ -156,6 +156,37 @@ at request completion regardless of outcome.
 | Sensitive data | Value classification at boundaries | PII/PCI/PHI written to logs, sent to a third-party host, or stored unencrypted |
 | API surface | Route registration + observed traffic | Undocumented endpoints, verb tampering surface, missing rate limiting |
 
+### What the JVM agent implements today
+
+Dataflow only, and all eleven of its rule classes:
+
+| Rule class | Sink | Recognised sanitizer |
+|---|---|---|
+| `sql-injection` | `Statement.execute*(String)` | parameter binding (`PreparedStatement` is not a sink) |
+| `command-injection` | `Runtime.exec(String)` | — |
+| `path-traversal` | `new File(String)` | — |
+| `reflected-xss` | the response's own writer, matched by identity | commons-text / commons-lang / Spring `HtmlUtils` / OWASP encoder |
+| `open-redirect` | `HttpServletResponse.sendRedirect` | `URLEncoder.encode` |
+| `header-injection` | `setHeader` / `addHeader`, name **and** value | `URLEncoder.encode` |
+| `ssrf` | `new URL(String)` | `URLEncoder.encode` |
+| `ldap-injection` | `DirContext.search(_, filter, _)` | ESAPI `encodeForLDAP` / `encodeForDN` |
+| `xpath-injection` | `XPath.compile` / `evaluate` | ESAPI `encodeForXPath` |
+| `log-injection` | SLF4J and `java.util.logging` | — |
+| `unsafe-deserialization` | `new ObjectInputStream(in)` | — |
+
+The other six families in the table above — configuration, cryptography, authn/authz, dependencies,
+sensitive data, API surface — are **not implemented** in the JVM agent.
+
+Two notes on the harder entries. **XSS** is a sink on the response, but the write happens on a
+`Writer` that has no idea it belongs to one; instrumenting every writer and reporting on all of them
+would flag `System.out`. The object the response hands out is remembered instead, and the write is
+checked against it by identity. **Deserialization** is the only sink whose dangerous value is not a
+string: taint arrives as a parameter, becomes bytes, becomes a stream, and only then reaches Java
+serialization — which is why the taint table is keyed on object identity rather than on character
+data. Its sink is the `ObjectInputStream` constructor, not `readObject`, because the constructor
+already reads and validates the stream header: a hostile payload that is not well-formed throws
+there, and a sink on `readObject` would never see the attempt.
+
 ## 5. Per-language instrumentation
 
 | Runtime | Entry point | Instrumentation technology | Notes |

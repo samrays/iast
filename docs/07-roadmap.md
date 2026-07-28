@@ -115,14 +115,17 @@ Notes from implementation worth carrying forward:
   `getParameterValues`, `getHeader`, `getQueryString`, `getPathInfo`, `getRequestURI`,
   `Cookie.getValue`. Spring's matched route pattern is read from the request attribute, so findings
   group by route rather than by path.
-- ✅ Sinks: JDBC `Statement`, `Runtime.exec`, `java.io.File`.
+- ✅ Sinks for **all eleven declared rule classes**: SQL, command, path, reflected XSS, open redirect,
+  header injection, SSRF, LDAP, XPath, log injection and unsafe deserialization — with per-rule
+  sanitizer recognition, so a URL encoder clears the URL-context rules and leaves SQL alone.
 - ✅ Async context propagation across `Executor.execute` and `submit(Runnable|Callable)`.
 - ✅ Redaction in-process, bounded ring buffer, resource governor, fail-open hooks, per-request
   finding deduplication.
 - ✅ Durable offline spool, retry backoff, TLS with SPKI certificate pinning.
 - ✅ `apps/gateway`: agent auth, schema validation, per-tenant quota, dedup, Kafka/file/memory sinks.
-- ✅ **Detection gate in CI:** a corpus of paired vulnerable and safe cases modelled on the OWASP
-  Benchmark categories, at 100% recall and 0% false positives, enforced by `CorpusIT`.
+- ✅ **Detection gate in CI:** 28 paired vulnerable/safe cases modelled on the OWASP Benchmark
+  categories — **14/14 recall, 0/14 false positives**, no duplicate findings, and every declared rule
+  class proven reachable. Enforced by `CorpusIT`.
 - ✅ **Overhead gate in CI:** the same workload measured with and without the agent, enforced by
   `OverheadIT`. Measured cost is ~30–60µs added per request depending on machine load.
 

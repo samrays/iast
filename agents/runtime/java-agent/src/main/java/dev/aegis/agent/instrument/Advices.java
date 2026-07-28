@@ -236,6 +236,211 @@ public final class Advices {
         }
     }
 
+    /** {@code DirContext.search(name, filter, ...)} — the filter is the injection point. */
+    public static final class LdapSearch {
+        private LdapSearch() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(@Advice.Argument(1) Object filter) {
+            AgentRuntime.onSink(
+                    filter,
+                    RuleClass.LDAP_INJECTION,
+                    "javax.naming.directory.DirContext#search(String,String,..)");
+        }
+    }
+
+    /** {@code XPath.compile/evaluate(String)}. */
+    public static final class XPathEvaluate {
+        private XPathEvaluate() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(@Advice.Argument(0) Object expression) {
+            AgentRuntime.onSink(
+                    expression,
+                    RuleClass.XPATH_INJECTION,
+                    "javax.xml.xpath.XPath#evaluate(String,..)");
+        }
+    }
+
+    /** {@code new URL(String)} and {@code URI.create(String)} — server-side request forgery. */
+    public static final class UrlConstruction {
+        private UrlConstruction() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(@Advice.Argument(0) Object target) {
+            AgentRuntime.onSink(target, RuleClass.SSRF, "java.net.URL#<init>(String)");
+        }
+    }
+
+    /** {@code HttpServletResponse.sendRedirect(String)}. */
+    public static final class Redirect {
+        private Redirect() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(@Advice.Argument(0) Object location) {
+            AgentRuntime.onSink(
+                    location,
+                    RuleClass.OPEN_REDIRECT,
+                    "jakarta.servlet.http.HttpServletResponse#sendRedirect(String)");
+        }
+    }
+
+    /**
+     * {@code setHeader/addHeader(name, value)}.
+     *
+     * <p>Both arguments are checked. A tainted header <em>name</em> is the more dangerous of the
+     * two and the one people forget.
+     */
+    public static final class ResponseHeader {
+        private ResponseHeader() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(
+                @Advice.Argument(0) Object name, @Advice.Argument(1) Object value) {
+            AgentRuntime.onSink(
+                    name,
+                    RuleClass.HEADER_INJECTION,
+                    "jakarta.servlet.http.HttpServletResponse#setHeader(String,String)");
+            AgentRuntime.onSink(
+                    value,
+                    RuleClass.HEADER_INJECTION,
+                    "jakarta.servlet.http.HttpServletResponse#setHeader(String,String)");
+        }
+    }
+
+    /** {@code Logger.info/warn/error(String)} — SLF4J, Log4j and {@code java.util.logging}. */
+    public static final class LogWrite {
+        private LogWrite() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(@Advice.Argument(0) Object message) {
+            AgentRuntime.onSink(message, RuleClass.LOG_INJECTION, "org.slf4j.Logger#info(String)");
+        }
+    }
+
+    /**
+     * {@code new ObjectInputStream(in)} — handing Java serialization an attacker's stream.
+     *
+     * <p>The construction, not the {@code readObject}, because the constructor already reads and
+     * validates the stream header: a hostile payload that is not well-formed throws there, and a
+     * sink placed on {@code readObject} would never see the attempt at all.
+     */
+    public static final class DeserializeConstruct {
+        private DeserializeConstruct() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(@Advice.Argument(0) Object source) {
+            AgentRuntime.onObjectSink(
+                    source,
+                    RuleClass.UNSAFE_DESERIALIZATION,
+                    "java.io.ObjectInputStream#<init>(InputStream)");
+        }
+    }
+
+    /** {@code ObjectInputStream.readObject()}, for a stream that was well-formed enough to open. */
+    public static final class Deserialize {
+        private Deserialize() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(@Advice.This Object stream) {
+            AgentRuntime.onObjectSink(
+                    stream,
+                    RuleClass.UNSAFE_DESERIALIZATION,
+                    "java.io.ObjectInputStream#readObject()");
+        }
+    }
+
+    // --- response body, for reflected XSS ---------------------------------------------------
+
+    /** {@code ServletResponse.getWriter()/getOutputStream()} — remember the body channel. */
+    public static final class ResponseChannel {
+        private ResponseChannel() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(@Advice.Return Object channel) {
+            AgentRuntime.onResponseChannel(channel);
+        }
+    }
+
+    /**
+     * {@code Writer.write/print/println(String)}.
+     *
+     * <p>Fires for every writer in the process and reports for exactly one: the object this
+     * request's response handed out. Matching on the writer's type instead would either miss
+     * the container's own subclass or flag {@code System.out}.
+     */
+    public static final class ResponseWrite {
+        private ResponseWrite() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(@Advice.This Object target, @Advice.Argument(0) Object value) {
+            AgentRuntime.onResponseWrite(target, value);
+        }
+    }
+
+    // --- sanitizers -------------------------------------------------------------------------
+
+    /**
+     * {@code URLEncoder.encode(String, ...)}.
+     *
+     * <p>Clears the URL-context rules and nothing else. Percent-encoding makes a value safe in a
+     * URL or a header and does precisely nothing for HTML or SQL — treating "sanitized" as one
+     * global flag is how an engine misses the injection that matters (ADR-0007).
+     */
+    public static final class UrlEncode {
+        private UrlEncode() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.Argument(0) Object source, @Advice.Return String result) {
+            AgentRuntime.onUrlEncoded(result, source);
+        }
+    }
+
+    /** An HTML or XML escaper: Apache commons-text, Spring's HtmlUtils, the OWASP encoder. */
+    public static final class HtmlEscape {
+        private HtmlEscape() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.Argument(0) Object source, @Advice.Return String result) {
+            AgentRuntime.onHtmlEscaped(result, source);
+        }
+    }
+
+    /** An LDAP or XPath encoder. */
+    public static final class QueryEncode {
+        private QueryEncode() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.Argument(0) Object source, @Advice.Return String result) {
+            AgentRuntime.onQueryEncoded(result, source);
+        }
+    }
+
+    // --- object-level propagation ------------------------------------------------------------
+
+    /** {@code String.getBytes()}, and streams wrapping a tainted buffer. */
+    public static final class DerivedFromThis {
+        private DerivedFromThis() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(@Advice.This Object source, @Advice.Return Object derived) {
+            AgentRuntime.onDerivedObject(derived, source);
+        }
+    }
+
+    /** A constructor taking a tainted argument, e.g. {@code new ByteArrayInputStream(bytes)}. */
+    public static final class DerivedFromArgument {
+        private DerivedFromArgument() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(@Advice.This Object derived, @Advice.Argument(0) Object source) {
+            AgentRuntime.onDerivedObject(derived, source);
+        }
+    }
+
     // --- async context propagation -------------------------------------------------------
 
     /**

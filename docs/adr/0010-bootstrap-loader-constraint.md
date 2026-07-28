@@ -1,6 +1,6 @@
 # ADR-0010: The JVM agent's runtime is confined to `java.base`, and what that costs
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-28
 - **Deciders:** Agent engineering, Platform architecture, Security
 

@@ -98,6 +98,32 @@ public final class AegisAgent {
     }
 
     /**
+     * JDK types that must exist before the retransformation sweep runs.
+     *
+     * <p>{@code java.io.ObjectInputStream} is never offered to the class-file transformer on
+     * this JDK — it is absent from both the load-time path and the already-loaded sweep — so an
+     * agent that simply declares a matcher for it silently instruments nothing. Touching the
+     * class first puts it in {@code getAllLoadedClasses}, where the retransformation sweep does
+     * pick it up.
+     *
+     * <p>Loading a JDK class the application was going to load anyway costs a few microseconds
+     * of startup and changes no behaviour.
+     */
+    private static final String[] PRELOAD_FOR_RETRANSFORMATION = {
+        "java.io.ObjectInputStream",
+    };
+
+    private static void preloadForRetransformation() {
+        for (String name : PRELOAD_FOR_RETRANSFORMATION) {
+            try {
+                Class.forName(name, false, null);
+            } catch (ClassNotFoundException | LinkageError ignored) {
+                // A JDK without the type is a coverage gap, never a startup failure.
+            }
+        }
+    }
+
+    /**
      * Types whose {@code execute}/{@code submit} carry work to another thread.
      *
      * <p>Named explicitly, because matching every implementation of {@code Executor} means
@@ -114,16 +140,27 @@ public final class AegisAgent {
     };
 
     static void installTransformers(Instrumentation instrumentation) {
+        preloadForRetransformation();
         AgentBuilder builder =
                 new AgentBuilder.Default()
                         .disableClassFormatChanges()
                         .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                        // One class per batch. The default retransforms every already-loaded
+                        // type in a single call, so one type the JVM refuses to modify takes
+                        // the whole sweep down with it — and the default redefinition listener
+                        // swallows that, leaving an agent that reports itself healthy while
+                        // half its instrumentation is missing.
+                        .with(AgentBuilder.RedefinitionStrategy.BatchAllocator.ForFixedSize.ofSize(1))
+                        .with(new RedefinitionFailureListener())
                         .with(new FailSafeListener())
-                        // Never instrument our own classes: advice calling into instrumented
-                        // agent code is an infinite recursion inside the customer's process.
-                        .ignore(ElementMatchers.nameStartsWith("dev.aegis."))
-                        .ignore(ElementMatchers.nameStartsWith("net.bytebuddy."))
-                        .ignore(ElementMatchers.nameStartsWith("jdk.internal."));
+                        // One call, not three. `ignore` *replaces* its matcher rather than
+                        // adding to it, so chaining left only the last one in force — and the
+                        // agent was instrumenting its own classes and Byte Buddy's, relying on
+                        // the re-entrancy guard to survive it.
+                        .ignore(
+                                ElementMatchers.<TypeDescription>nameStartsWith("dev.aegis.")
+                                        .or(ElementMatchers.nameStartsWith("net.bytebuddy."))
+                                        .or(ElementMatchers.nameStartsWith("jdk.internal.")));
 
         // --- propagators ----------------------------------------------------------------
         builder =
@@ -262,8 +299,223 @@ public final class AegisAgent {
 
         builder = installHttpTransformers(builder);
         builder = installAsyncTransformers(builder);
+        builder = installSinkTransformers(builder);
+        builder = installSanitizerTransformers(builder);
 
         builder.installOn(instrumentation);
+    }
+
+    /**
+     * Attach one advice to the methods of one type.
+     *
+     * <p>Byte Buddy's fluent form nests four levels deep per registration, which turns a list of
+     * sinks — the thing a reader most needs to be able to scan — into a wall. This says the same
+     * thing on one line.
+     */
+    private static AgentBuilder advise(
+            AgentBuilder builder,
+            net.bytebuddy.matcher.ElementMatcher.Junction<TypeDescription> type,
+            Class<?> advice,
+            net.bytebuddy.matcher.ElementMatcher.Junction<
+                            net.bytebuddy.description.method.MethodDescription>
+                    methods) {
+        return builder.type(type)
+                .transform(
+                        (b, described, loader, module, pd) ->
+                                b.visit(net.bytebuddy.asm.Advice.to(advice).on(methods)));
+    }
+
+    /** Matches implementations of an interface, cheaply, via a name pre-filter. */
+    private static net.bytebuddy.matcher.ElementMatcher.Junction<TypeDescription> implementing(
+            String nameHint, String... interfaces) {
+        return ElementMatchers.<TypeDescription>nameContains(nameHint)
+                .and(ElementMatchers.hasSuperType(ElementMatchers.namedOneOf(interfaces)));
+    }
+
+    /**
+     * The remaining sink families.
+     *
+     * <p>Declaring eleven rule classes and detecting three is worse than declaring three: it puts
+     * a number on a report that the engine cannot stand behind. Each of these closes one.
+     */
+    private static AgentBuilder installSinkTransformers(AgentBuilder builder) {
+        // Reflected XSS. The response body is written through a Writer that has no idea it
+        // belongs to a response, so the channel is remembered when the response hands it out
+        // and the write is checked against it by identity.
+        net.bytebuddy.matcher.ElementMatcher.Junction<TypeDescription> httpResponse =
+                implementing(
+                        "Response",
+                        "jakarta.servlet.http.HttpServletResponse",
+                        "javax.servlet.http.HttpServletResponse");
+
+        builder =
+                advise(
+                        builder,
+                        httpResponse,
+                        Advices.ResponseChannel.class,
+                        ElementMatchers.namedOneOf("getWriter", "getOutputStream")
+                                .and(ElementMatchers.takesNoArguments()));
+        builder =
+                advise(
+                        builder,
+                        implementing("Writer", "java.io.Writer"),
+                        Advices.ResponseWrite.class,
+                        ElementMatchers.namedOneOf("write", "print", "println")
+                                .and(ElementMatchers.takesArgument(0, String.class)));
+
+        // Open redirect and header injection, on the same response.
+        builder =
+                advise(
+                        builder,
+                        httpResponse,
+                        Advices.Redirect.class,
+                        ElementMatchers.named("sendRedirect")
+                                .and(ElementMatchers.takesArgument(0, String.class)));
+        builder =
+                advise(
+                        builder,
+                        httpResponse,
+                        Advices.ResponseHeader.class,
+                        ElementMatchers.namedOneOf("setHeader", "addHeader")
+                                .and(ElementMatchers.takesArguments(String.class, String.class)));
+
+        // Server-side request forgery.
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.named("java.net.URL"),
+                        Advices.UrlConstruction.class,
+                        ElementMatchers.isConstructor()
+                                .and(ElementMatchers.takesArgument(0, String.class)));
+
+        // LDAP: the filter, not the name, is where injection lives.
+        builder =
+                advise(
+                        builder,
+                        implementing("Ctx", "javax.naming.directory.DirContext")
+                                .or(implementing("Context", "javax.naming.directory.DirContext")),
+                        Advices.LdapSearch.class,
+                        ElementMatchers.named("search")
+                                .and(ElementMatchers.takesArgument(1, String.class)));
+
+        // XPath.
+        builder =
+                advise(
+                        builder,
+                        implementing("XPath", "javax.xml.xpath.XPath"),
+                        Advices.XPathEvaluate.class,
+                        ElementMatchers.namedOneOf("compile", "evaluate")
+                                .and(ElementMatchers.takesArgument(0, String.class)));
+
+        // Log injection: a forged line in an audit log is how an attacker edits history.
+        builder =
+                advise(
+                        builder,
+                        implementing("Logger", "org.slf4j.Logger")
+                                .or(ElementMatchers.named("java.util.logging.Logger")),
+                        Advices.LogWrite.class,
+                        ElementMatchers.namedOneOf(
+                                        "info", "warn", "warning", "error", "severe", "debug",
+                                        "trace")
+                                .and(ElementMatchers.takesArgument(0, String.class)));
+
+        return installDeserializationTransformers(builder);
+    }
+
+    /**
+     * Unsafe deserialization, and the object-level propagation it needs.
+     *
+     * <p>The only sink whose dangerous value is not a string. Taint arrives as a parameter,
+     * becomes bytes, becomes a stream, and only then reaches {@code readObject} — so the chain
+     * has to be tracked through three objects that are not text at all. A table that only ever
+     * holds strings cannot see this attack, which is why the tracker is keyed on object identity
+     * rather than on character data.
+     */
+    private static AgentBuilder installDeserializationTransformers(AgentBuilder builder) {
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.named("java.lang.String"),
+                        Advices.DerivedFromThis.class,
+                        // `returns` is not decoration. String.getBytes has a void overload, and
+                        // an advice declaring @Advice.Return cannot be applied to it — which
+                        // fails the transformation of java.lang.String *as a whole*, silently
+                        // taking concat, substring and every other propagator down with it.
+                        ElementMatchers.named("getBytes")
+                                .and(ElementMatchers.returns(byte[].class)));
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.named("java.io.ByteArrayInputStream"),
+                        Advices.DerivedFromArgument.class,
+                        ElementMatchers.isConstructor()
+                                .and(ElementMatchers.takesArgument(0, byte[].class)));
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.named("java.io.ObjectInputStream"),
+                        Advices.DeserializeConstruct.class,
+                        ElementMatchers.isConstructor()
+                                .and(
+                                        ElementMatchers.takesArgument(
+                                                0, java.io.InputStream.class)));
+        return advise(
+                builder,
+                ElementMatchers.named("java.io.ObjectInputStream"),
+                Advices.Deserialize.class,
+                ElementMatchers.named("readObject").and(ElementMatchers.takesNoArguments()));
+    }
+
+    /**
+     * Encoders, which clear taint for the rule class they actually address — and only that one.
+     *
+     * <p>Without these the new sinks would fire on correct code, and a tool that flags correct
+     * code is a tool that gets switched off. HTML-escaping a value makes it safe to render and
+     * does nothing whatsoever to make it safe to concatenate into SQL (ADR-0007).
+     *
+     * <p>The third-party encoders are matched by name and are simply absent when a customer does
+     * not use them. Matching a library we do not depend on costs nothing and is the only way to
+     * recognise the encoder they actually reach for.
+     */
+    private static AgentBuilder installSanitizerTransformers(AgentBuilder builder) {
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.named("java.net.URLEncoder"),
+                        Advices.UrlEncode.class,
+                        ElementMatchers.named("encode")
+                                .and(ElementMatchers.takesArgument(0, String.class))
+                                .and(ElementMatchers.returns(String.class)));
+
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.namedOneOf(
+                                "org.apache.commons.text.StringEscapeUtils",
+                                "org.apache.commons.lang3.StringEscapeUtils",
+                                "org.apache.commons.lang.StringEscapeUtils",
+                                "org.springframework.web.util.HtmlUtils",
+                                "org.owasp.encoder.Encode"),
+                        Advices.HtmlEscape.class,
+                        ElementMatchers.<net.bytebuddy.description.method.MethodDescription>
+                                        nameStartsWith("escapeHtml")
+                                .or(ElementMatchers.nameStartsWith("escapeXml"))
+                                .or(ElementMatchers.nameStartsWith("escapeEcmaScript"))
+                                .or(ElementMatchers.nameStartsWith("htmlEscape"))
+                                .or(ElementMatchers.nameStartsWith("forHtml"))
+                                .or(ElementMatchers.nameStartsWith("forJavaScript"))
+                                .and(ElementMatchers.takesArgument(0, String.class))
+                                .and(ElementMatchers.returns(String.class)));
+
+        return advise(
+                builder,
+                implementing("Encoder", "org.owasp.esapi.Encoder")
+                        .or(ElementMatchers.named("org.owasp.encoder.Encode")),
+                Advices.QueryEncode.class,
+                ElementMatchers.<net.bytebuddy.description.method.MethodDescription>namedOneOf(
+                                "encodeForLDAP", "encodeForDN", "encodeForXPath", "forXmlContent")
+                        .and(ElementMatchers.takesArgument(0, String.class))
+                        .and(ElementMatchers.returns(String.class)));
     }
 
     /**
@@ -401,7 +653,40 @@ public final class AegisAgent {
      * transformed by another agent — and the correct response is to carry on without them and
      * report the gap.
      */
+    /** Surfaces failures in the retransformation sweep, which are otherwise silent. */
+    static final class RedefinitionFailureListener
+            extends AgentBuilder.RedefinitionStrategy.Listener.Adapter {
+        @Override
+        public Iterable<? extends java.util.List<Class<?>>> onError(
+                int index,
+                java.util.List<Class<?>> batch,
+                Throwable throwable,
+                java.util.List<Class<?>> types) {
+            if (Boolean.getBoolean("aegis.debug")) {
+                System.err.println("[aegis] retransformation failed for " + batch + ": " + throwable);
+            }
+            return java.util.Collections.emptyList();
+        }
+    }
+
     static final class FailSafeListener extends AgentBuilder.Listener.Adapter {
+
+        /**
+         * Types whose loss silently guts the taint engine.
+         *
+         * <p>A failure on an application class is a small gap. A failure on one of these means
+         * the agent is running, reporting itself healthy, and detecting nothing — which is how
+         * a broken `getBytes` matcher cost the whole of `java.lang.String`, and with it every
+         * propagator on it, while the suite still showed an installed agent.
+         */
+        private static final java.util.Set<String> LOAD_BEARING =
+                java.util.Set.of(
+                        "java.lang.String",
+                        "java.lang.StringBuilder",
+                        "java.lang.StringBuffer",
+                        "java.lang.invoke.StringConcatFactory",
+                        "java.io.ObjectInputStream");
+
         @Override
         public void onError(
                 String typeName,
@@ -409,8 +694,32 @@ public final class AegisAgent {
                 JavaModule module,
                 boolean loaded,
                 Throwable throwable) {
+            if (LOAD_BEARING.contains(typeName)) {
+                // Reported, not merely logged: an application with poor instrumentation coverage
+                // and no findings must read as *unknown*, never as *secure* (ADR-0007).
+                reportCoverageGap(typeName, throwable);
+            }
             if (Boolean.getBoolean("aegis.debug")) {
                 System.err.println("[aegis] could not instrument " + typeName + ": " + throwable);
+            }
+        }
+
+        private static void reportCoverageGap(String typeName, Throwable throwable) {
+            try {
+                Class<?> runtimeClass = Class.forName("dev.aegis.agent.AgentRuntime", true, null);
+                Object runtime = runtimeClass.getMethod("get").invoke(null);
+                if (runtime == null) {
+                    return;
+                }
+                Object reporter = runtimeClass.getMethod("reporter").invoke(runtime);
+                reporter.getClass()
+                        .getMethod("reportCoverageGap", String.class, String.class)
+                        .invoke(
+                                reporter,
+                                "instrumentation failed: " + throwable,
+                                typeName);
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                // Reporting the gap must not itself become a failure path.
             }
         }
 

@@ -963,6 +963,191 @@ public final class AgentRuntime {
     }
 
     /**
+     * A sink whose dangerous argument is not a string.
+     *
+     * <p>Deserialization is the case that needs this: what reaches
+     * {@code ObjectInputStream.readObject} is a stream, and the taint arrived as bytes. The
+     * evidence is therefore the provenance rather than the value — reproducing an attacker's
+     * serialized payload in a finding would be handing it back out in a report.
+     */
+    public static Finding onObjectSink(Object argument, RuleClass rule, String sinkSignature) {
+        AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
+        if (runtime == null || argument == null || !state.enter()) {
+            return null;
+        }
+        try {
+            if (!runtime.governor.level().allowsDataflow()) {
+                return null;
+            }
+            RequestContext context = state.context();
+            if (context == null || !context.isSampled() || context.tracker().isEmpty()) {
+                return null;
+            }
+            runtime.sinksEvaluated.incrementAndGet();
+
+            TaintedValue taint = context.tracker().taintOf(argument);
+            if (!taint.isTainted()) {
+                return null;
+            }
+            Finding finding =
+                    runtime.detector.evaluate(
+                            taint,
+                            "<" + argument.getClass().getSimpleName() + ">",
+                            rule,
+                            sinkSignature,
+                            new Throwable().getStackTrace(),
+                            false);
+            if (finding != null
+                    && context.firstReport(
+                            finding.rule().key() + "|" + finding.stackFingerprint())) {
+                runtime.findingsReported.incrementAndGet();
+                runtime.reporter.report(finding, context);
+            }
+            return finding;
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+            return null;
+        } finally {
+            state.exit();
+        }
+    }
+
+    /**
+     * Carry taint from a value onto a derived object — {@code String.getBytes()}, a stream
+     * wrapping a buffer, a reader wrapping a stream.
+     *
+     * <p>Without this the taint table only ever holds strings, and every dataflow that leaves
+     * the character world — which is every deserialization attack — becomes invisible.
+     */
+    public static void onDerivedObject(Object derived, Object source) {
+        AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
+        if (runtime == null || derived == null || !state.enter()) {
+            return;
+        }
+        try {
+            RequestContext context = state.context();
+            if (context == null || !context.isSampled()) {
+                return;
+            }
+            TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
+            TaintedValue taint = tracker.taintOf(source);
+            if (taint.isTainted()) {
+                tracker.track(derived, taint);
+            }
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            state.exit();
+        }
+    }
+
+    /**
+     * {@code ServletResponse.getWriter()} — remember where the response body goes.
+     *
+     * <p>Reflected XSS is a sink on the response, but the write happens on a {@code Writer} that
+     * has no idea it belongs to one. Instrumenting every writer and reporting on all of them
+     * would flag {@code System.out}; remembering the specific object the response handed out
+     * makes the check exact and costs one identity lookup.
+     */
+    public static void onResponseChannel(Object channel) {
+        AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
+        if (runtime == null || channel == null || !state.enter()) {
+            return;
+        }
+        try {
+            RequestContext context = state.context();
+            if (context != null) {
+                context.registerResponseChannel(channel);
+            }
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            state.exit();
+        }
+    }
+
+    /** A write to something. Reports only when the target is this request's response body. */
+    public static void onResponseWrite(Object target, Object value) {
+        AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
+        if (runtime == null || !(value instanceof String) || !state.enter()) {
+            return;
+        }
+        boolean isResponse;
+        try {
+            RequestContext context = state.context();
+            isResponse = context != null && context.isResponseChannel(target);
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+            return;
+        } finally {
+            state.exit();
+        }
+        if (isResponse) {
+            // Outside the guard: onSink takes it again, and it also captures the stack, which
+            // must show the application frame that wrote — not this method.
+            onSink(value, RuleClass.REFLECTED_XSS, "jakarta.servlet.ServletResponse#getWriter");
+        }
+    }
+
+    /**
+     * A URL-context encoder ran — {@code URLEncoder.encode} and friends.
+     *
+     * <p>Percent-encoding makes a value safe to place in a URL or a header. It does nothing
+     * whatsoever to make it safe in HTML or in SQL, so exactly three rule classes are cleared
+     * and the rest are deliberately left alone (ADR-0007).
+     */
+    public static void onUrlEncoded(String result, Object source) {
+        sanitize(result, source, RuleClass.OPEN_REDIRECT, RuleClass.HEADER_INJECTION, RuleClass.SSRF);
+    }
+
+    /** An HTML or XML escaper ran. Clears reflected XSS, and nothing else. */
+    public static void onHtmlEscaped(String result, Object source) {
+        sanitize(result, source, RuleClass.REFLECTED_XSS);
+    }
+
+    /** An LDAP or XPath encoder ran. */
+    public static void onQueryEncoded(String result, Object source) {
+        sanitize(result, source, RuleClass.LDAP_INJECTION, RuleClass.XPATH_INJECTION);
+    }
+
+    private static void sanitize(String result, Object source, RuleClass... rules) {
+        AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
+        if (runtime == null || result == null || !state.enter()) {
+            return;
+        }
+        try {
+            RequestContext context = state.context();
+            if (context == null) {
+                return;
+            }
+            TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
+            TaintedValue taint = tracker.taintOf(source);
+            if (!taint.isTainted()) {
+                return;
+            }
+            for (RuleClass rule : rules) {
+                taint = taint.sanitizedFor(rule);
+            }
+            tracker.track(result, taint);
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            state.exit();
+        }
+    }
+
+    /**
      * Record an internal failure and keep going.
      *
      * <p>Deliberately silent by default. An agent that logs a stack trace on every hook

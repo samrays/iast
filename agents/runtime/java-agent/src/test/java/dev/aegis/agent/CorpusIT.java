@@ -160,6 +160,33 @@ class CorpusIT {
     }
 
     @Test
+    @DisplayName("every declared rule class has a working sink")
+    void everyDeclaredRuleIsReachable() {
+        // Declaring eleven rule classes and detecting three is worse than declaring three: it
+        // puts a number on a report the engine cannot stand behind.
+        java.util.Set<String> proven =
+                findings.values().stream()
+                        .flatMap(List::stream)
+                        .map(
+                                line -> {
+                                    int at = line.indexOf("\"rule_key\":\"");
+                                    int from = at + "\"rule_key\":\"".length();
+                                    return line.substring(from, line.indexOf('"', from));
+                                })
+                        .collect(Collectors.toSet());
+
+        List<String> unproven =
+                BenchmarkApp.CASES.values().stream()
+                        .filter(c -> BenchmarkApp.Expectation.VULNERABLE.name().equals(c[0]))
+                        .map(c -> c[1])
+                        .distinct()
+                        .filter(rule -> !proven.contains(rule))
+                        .collect(Collectors.toList());
+
+        assertTrue(unproven.isEmpty(), "rule classes with no working sink: " + unproven);
+    }
+
+    @Test
     @DisplayName("`+` concatenation is tracked, not just StringBuilder")
     void tracksInvokedynamicConcatenation() {
         // Since Java 9 the compiler lowers `+` to an invokedynamic against StringConcatFactory.

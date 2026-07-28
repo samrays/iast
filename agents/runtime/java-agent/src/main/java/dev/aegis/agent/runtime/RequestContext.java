@@ -22,6 +22,12 @@ public final class RequestContext {
     private final java.util.Set<String> reported =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    /** Ceiling on remembered response body channels. */
+    static final int MAX_RESPONSE_CHANNELS = 8;
+
+    private final java.util.Set<Object> responseChannels =
+            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+
     private final TaintTracker tracker = new TaintTracker();
     private final String traceId;
     private final long startedAtNanos = System.nanoTime();
@@ -136,6 +142,24 @@ public final class RequestContext {
      *
      * <p>Concurrent because {@link #adopt} deliberately shares a context across threads.
      */
+    /**
+     * Remember an object the response handed out as its body channel.
+     *
+     * <p>Identity-keyed and bounded. A response yields at most a writer and an output stream, so
+     * a handful of entries covers any sane application and a pathological one cannot grow this
+     * without bound.
+     */
+    public void registerResponseChannel(Object channel) {
+        if (channel != null && responseChannels.size() < MAX_RESPONSE_CHANNELS) {
+            responseChannels.add(channel);
+        }
+    }
+
+    /** True when writing to this object writes the HTTP response — not, say, {@code System.out}. */
+    public boolean isResponseChannel(Object channel) {
+        return channel != null && !responseChannels.isEmpty() && responseChannels.contains(channel);
+    }
+
     public boolean firstReport(String key) {
         if (reported.size() >= MAX_REPORTED_PER_REQUEST) {
             return false;
