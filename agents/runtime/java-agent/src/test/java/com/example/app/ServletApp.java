@@ -1,4 +1,4 @@
-package dev.aegis.agent.demo;
+package com.example.app;
 
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;

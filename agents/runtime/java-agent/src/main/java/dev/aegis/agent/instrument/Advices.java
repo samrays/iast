@@ -103,24 +103,31 @@ public final class Advices {
     /**
      * {@code StringBuilder.append(...)}.
      *
-     * <p>Captures the builder's content <em>before</em> the append so the range arithmetic
-     * knows where the appended value lands. Reading it afterwards would give the combined
-     * length and shift every range by the wrong amount.
+     * <p>Captures the builder's <em>length</em> before the append, so the range arithmetic knows
+     * where the appended value lands. Reading it afterwards would give the combined length and
+     * shift every range by the wrong amount.
+     *
+     * <p>The length, emphatically not the content. This advice is inlined into
+     * {@code java.lang.StringBuilder}, so it runs for every append in the entire process —
+     * the container's, the framework's, the JDK's. Calling {@code toString()} here copies the
+     * whole buffer and allocates a String each time, turning an O(1) append into O(n) and
+     * making assembly of a long string quadratic. It measured as the single largest cost in
+     * the agent.
      */
     public static final class BuilderAppend {
         private BuilderAppend() {}
 
         @Advice.OnMethodEnter(suppress = Throwable.class)
-        public static String enter(@Advice.This Object self) {
-            return self.toString();
+        public static int enter(@Advice.This CharSequence self) {
+            return self.length();
         }
 
         @Advice.OnMethodExit(suppress = Throwable.class)
         public static void exit(
-                @Advice.Enter String before,
+                @Advice.Enter int lengthBefore,
                 @Advice.This Object self,
                 @Advice.Argument(0) Object argument) {
-            AgentRuntime.onBuilderAppend(self, before, argument);
+            AgentRuntime.onBuilderAppend(self, lengthBefore, argument);
         }
     }
 
@@ -136,10 +143,13 @@ public final class Advices {
 
         @Advice.OnMethodExit(suppress = Throwable.class)
         public static void exit(
+                @Advice.Argument(0) java.lang.invoke.MethodHandles.Lookup lookup,
                 @Advice.Argument(3) String recipe,
                 @Advice.Argument(4) Object[] constants,
                 @Advice.Return(readOnly = false) java.lang.invoke.CallSite site) {
-            site = AgentRuntime.wrapConcat(site, recipe, constants);
+            site =
+                    AgentRuntime.wrapConcat(
+                            site, lookup.lookupClass().getName(), recipe, constants);
         }
     }
 
@@ -148,8 +158,10 @@ public final class Advices {
         private ConcatFactory() {}
 
         @Advice.OnMethodExit(suppress = Throwable.class)
-        public static void exit(@Advice.Return(readOnly = false) java.lang.invoke.CallSite site) {
-            site = AgentRuntime.wrapConcat(site, null, null);
+        public static void exit(
+                @Advice.Argument(0) java.lang.invoke.MethodHandles.Lookup lookup,
+                @Advice.Return(readOnly = false) java.lang.invoke.CallSite site) {
+            site = AgentRuntime.wrapConcat(site, lookup.lookupClass().getName(), null, null);
         }
     }
 

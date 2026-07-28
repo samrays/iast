@@ -1,6 +1,6 @@
-package dev.aegis.agent.corpus;
+package com.example.corpus;
 
-import dev.aegis.agent.demo.UserRepository;
+import com.example.app.UserRepository;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;

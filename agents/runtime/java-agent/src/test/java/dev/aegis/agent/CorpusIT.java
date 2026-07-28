@@ -3,7 +3,7 @@ package dev.aegis.agent;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import dev.aegis.agent.corpus.BenchmarkApp;
+import com.example.corpus.BenchmarkApp;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -72,12 +72,12 @@ class CorpusIT {
                         "-javaagent:"
                                 + agentJar
                                 + "=application=corpus,environment=DEVELOPMENT,"
-                                + "packages=dev.aegis.agent.corpus;dev.aegis.agent.demo,"
+                                + "packages=com.example,"
                                 + "capture=FULL,endpoint=file:"
                                 + eventsFile.toString().replace('\\', '/'),
                         "-cp",
                         classpath,
-                        "dev.aegis.agent.corpus.BenchmarkApp");
+                        "com.example.corpus.BenchmarkApp");
 
         Process process = new ProcessBuilder(command).start();
         stdout = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);

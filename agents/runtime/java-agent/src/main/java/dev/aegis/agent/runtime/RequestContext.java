@@ -15,7 +15,6 @@ import java.util.Map;
  */
 public final class RequestContext {
 
-    private static final ThreadLocal<RequestContext> CURRENT = new ThreadLocal<>();
 
     /** Ceiling on distinct defects reported per request. */
     static final int MAX_REPORTED_PER_REQUEST = 256;
@@ -44,13 +43,13 @@ public final class RequestContext {
     /** Begin a request on this thread. An existing context is replaced, never nested. */
     public static RequestContext begin(String traceId, boolean sampled) {
         RequestContext context = new RequestContext(traceId, sampled);
-        CURRENT.set(context);
+        ThreadState.current().context = context;
         return context;
     }
 
     /** The active context, or {@code null} outside a request. Callers must tolerate null. */
     public static RequestContext current() {
-        return CURRENT.get();
+        return ThreadState.current().context;
     }
 
     /**
@@ -61,23 +60,24 @@ public final class RequestContext {
      * leak memory and bleed one user's data into the next request on that thread.
      */
     public static void end() {
-        RequestContext context = CURRENT.get();
+        ThreadState state = ThreadState.current();
+        RequestContext context = state.context;
         if (context != null) {
             context.tracker.clear();
-            CURRENT.remove();
+            state.context = null;
         }
     }
 
     /** Adopt a context on another thread, for executor and future hand-offs. */
     public static void adopt(RequestContext context) {
         if (context != null) {
-            CURRENT.set(context);
+            ThreadState.current().context = context;
         }
     }
 
     /** Detach without clearing: the originating thread still owns the table. */
     public static void detach() {
-        CURRENT.remove();
+        ThreadState.current().context = null;
     }
 
     public TaintTracker tracker() {

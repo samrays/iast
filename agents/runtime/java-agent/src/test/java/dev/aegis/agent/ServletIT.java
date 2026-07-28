@@ -84,11 +84,11 @@ class ServletIT {
                         "-javaagent:"
                                 + agentJar
                                 + "=application=servlet-demo,environment=DEVELOPMENT,"
-                                + "packages=dev.aegis.agent.demo,capture=FULL,"
+                                + "packages=com.example.app,capture=FULL,"
                                 + extraAgentArgs,
                         "-cp",
                         classpath,
-                        "dev.aegis.agent.demo.ServletApp");
+                        "com.example.app.ServletApp");
 
         Process process = new ProcessBuilder(command).start();
         String stdout = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
@@ -140,7 +140,7 @@ class ServletIT {
         assertTrue(synchronous.contains("\"source_name\":\"name\""), synchronous);
         // Request evidence a developer can act on.
         assertTrue(synchronous.contains("\"method\":\"GET\""), synchronous);
-        assertTrue(synchronous.contains("dev.aegis.agent.demo.UserRepository"), synchronous);
+        assertTrue(synchronous.contains("com.example.app.UserRepository"), synchronous);
     }
 
     @Test

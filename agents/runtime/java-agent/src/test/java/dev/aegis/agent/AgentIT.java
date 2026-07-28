@@ -68,12 +68,12 @@ class AgentIT {
                         "-javaagent:"
                                 + agentJar
                                 + "=application=demo-app,environment=DEVELOPMENT,"
-                                + "packages=dev.aegis.agent.demo,capture=FULL,"
+                                + "packages=com.example.app,capture=FULL,"
                                 + "endpoint=file:"
                                 + eventsFile.toString().replace('\\', '/'),
                         "-cp",
                         classpath,
-                        "dev.aegis.agent.demo.VulnerableApp");
+                        "com.example.app.VulnerableApp");
 
         ProcessBuilder builder = new ProcessBuilder(command);
         Process process = builder.start();
@@ -132,7 +132,7 @@ class AgentIT {
         assertTrue(finding.contains("\"stack_fingerprint\":\""), finding);
 
         // The application frame is present and marked as application code; JDK frames are not.
-        assertTrue(finding.contains("dev.aegis.agent.demo"), finding);
+        assertTrue(finding.contains("com.example.app"), finding);
     }
 
     @Test

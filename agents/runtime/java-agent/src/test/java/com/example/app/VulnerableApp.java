@@ -1,4 +1,4 @@
-package dev.aegis.agent.demo;
+package com.example.app;
 
 import dev.aegis.agent.AgentRuntime;
 import dev.aegis.agent.runtime.RequestContext;

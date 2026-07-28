@@ -96,6 +96,19 @@ public final class TaintTracker {
         return table.size();
     }
 
+    /**
+     * True when nothing in this request is tainted yet.
+     *
+     * <p>The propagation hooks are inlined into {@code String} and {@code StringBuilder}, so
+     * they fire for every concatenation the container, the framework and the driver perform —
+     * thousands per request, of which only a handful ever touch attacker data. This is the
+     * cheapest possible way to say "there is nothing to propagate": one field read against an
+     * empty map, instead of two identity lookups that were always going to miss.
+     */
+    public boolean isEmpty() {
+        return table.isEmpty();
+    }
+
     /** Released at request end regardless of how the request finished. */
     public void clear() {
         table.clear();

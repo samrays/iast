@@ -1,4 +1,4 @@
-package dev.aegis.agent.demo;
+package com.example.app;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;

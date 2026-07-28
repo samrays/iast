@@ -6,6 +6,7 @@ import dev.aegis.agent.redact.Redactor;
 import dev.aegis.agent.report.Reporter;
 import dev.aegis.agent.runtime.RequestContext;
 import dev.aegis.agent.runtime.ResourceGovernor;
+import dev.aegis.agent.runtime.ThreadState;
 import dev.aegis.agent.taint.RuleClass;
 import dev.aegis.agent.taint.TaintTracker;
 import dev.aegis.agent.taint.TaintedValue;
@@ -23,35 +24,6 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class AgentRuntime {
 
     private static volatile AgentRuntime instance;
-
-    /**
-     * Re-entrancy guard.
-     *
-     * <p>The agent's own code uses {@code StringBuilder} and {@code String} — and those are
-     * exactly the classes it instruments. Without this flag, a hook calls into the runtime,
-     * the runtime appends to a builder, that append fires the hook again, and the process
-     * dies in {@code StackOverflowError} (or, while a runtime class is still loading,
-     * {@code ClassCircularityError}). Every hook checks it first and does nothing while
-     * agent code is on the stack.
-     *
-     * <p>A plain {@code ThreadLocal} of {@code boolean[]} rather than {@code Boolean}: it is
-     * allocated once per thread and read without boxing on the hottest path in the product.
-     */
-    private static final ThreadLocal<boolean[]> REENTRY = ThreadLocal.withInitial(() -> new boolean[1]);
-
-    /** @return true when the caller took the guard and must call {@link #exit()} */
-    private static boolean enter() {
-        boolean[] flag = REENTRY.get();
-        if (flag[0]) {
-            return false;
-        }
-        flag[0] = true;
-        return true;
-    }
-
-    private static void exit() {
-        REENTRY.get()[0] = false;
-    }
 
     private final SinkDetector detector;
     private final Reporter reporter;
@@ -240,7 +212,8 @@ public final class AgentRuntime {
      */
     public static boolean onRequestEnter(Object request) {
         AgentRuntime runtime = instance;
-        if (runtime == null || !enter()) {
+        ThreadState state = ThreadState.current();
+        if (runtime == null || !state.enter()) {
             return false;
         }
         try {
@@ -269,7 +242,7 @@ public final class AgentRuntime {
             runtime.hookFailed(t);
             return false;
         } finally {
-            exit();
+            state.exit();
         }
     }
 
@@ -282,14 +255,15 @@ public final class AgentRuntime {
      */
     public static void onRequestExit(boolean owner, Object request) {
         AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
         if (runtime == null || !owner) {
             return;
         }
-        if (!enter()) {
+        if (!state.enter()) {
             return;
         }
         try {
-            RequestContext context = RequestContext.current();
+            RequestContext context = state.context();
             if (context == null) {
                 return;
             }
@@ -306,7 +280,7 @@ public final class AgentRuntime {
         } finally {
             // Unconditional: the whole point of this hook is that the table is always released.
             RequestContext.end();
-            exit();
+            state.exit();
         }
     }
 
@@ -331,14 +305,15 @@ public final class AgentRuntime {
      */
     public static void onHttpSource(String accessor, Object[] arguments, Object result) {
         AgentRuntime runtime = instance;
-        if (runtime == null || result == null || !enter()) {
+        ThreadState state = ThreadState.current();
+        if (runtime == null || result == null || !state.enter()) {
             return;
         }
         try {
             if (!runtime.governor.level().allowsDataflow()) {
                 return;
             }
-            RequestContext context = RequestContext.current();
+            RequestContext context = state.context();
             if (context == null || !context.isSampled()) {
                 return;
             }
@@ -365,7 +340,7 @@ public final class AgentRuntime {
         } catch (Throwable t) {
             runtime.hookFailed(t);
         } finally {
-            exit();
+            state.exit();
         }
     }
 
@@ -387,14 +362,15 @@ public final class AgentRuntime {
     /** {@code Cookie.getValue()} — attacker-controlled, and named by its own cookie. */
     public static void onCookieValue(Object cookie, String value) {
         AgentRuntime runtime = instance;
-        if (runtime == null || value == null || value.isEmpty() || !enter()) {
+        ThreadState state = ThreadState.current();
+        if (runtime == null || value == null || value.isEmpty() || !state.enter()) {
             return;
         }
         try {
             if (!runtime.governor.level().allowsDataflow()) {
                 return;
             }
-            RequestContext context = RequestContext.current();
+            RequestContext context = state.context();
             if (context == null || !context.isSampled()) {
                 return;
             }
@@ -406,7 +382,7 @@ public final class AgentRuntime {
         } catch (Throwable t) {
             runtime.hookFailed(t);
         } finally {
-            exit();
+            state.exit();
         }
     }
 
@@ -421,11 +397,12 @@ public final class AgentRuntime {
      */
     public static void onRequestBodyAccess(String accessor) {
         AgentRuntime runtime = instance;
-        if (runtime == null || !enter()) {
+        ThreadState state = ThreadState.current();
+        if (runtime == null || !state.enter()) {
             return;
         }
         try {
-            RequestContext context = RequestContext.current();
+            RequestContext context = state.context();
             if (context == null) {
                 return;
             }
@@ -435,7 +412,7 @@ public final class AgentRuntime {
         } catch (Throwable t) {
             runtime.hookFailed(t);
         } finally {
-            exit();
+            state.exit();
         }
     }
 
@@ -443,14 +420,15 @@ public final class AgentRuntime {
     public static void onSource(
             String value, dev.aegis.agent.taint.SourceKind kind, String name) {
         AgentRuntime runtime = instance;
-        if (runtime == null || !enter()) {
+        ThreadState state = ThreadState.current();
+        if (runtime == null || !state.enter()) {
             return;
         }
         if (runtime == null || !runtime.governor.level().allowsDataflow()) {
             return;
         }
         try {
-            RequestContext context = RequestContext.current();
+            RequestContext context = state.context();
             if (context == null || !context.isSampled()) {
                 return;
             }
@@ -459,7 +437,7 @@ public final class AgentRuntime {
         } catch (Throwable t) {
             runtime.hookFailed(t);
         } finally {
-            exit();
+            state.exit();
         }
     }
 
@@ -473,18 +451,22 @@ public final class AgentRuntime {
      */
     public static void onConcat(String result, Object left, Object right) {
         AgentRuntime runtime = instance;
-        if (runtime == null || !enter()) {
+        ThreadState state = ThreadState.current();
+        if (runtime == null || !state.enter()) {
             return;
         }
         if (runtime == null || result == null || !runtime.governor.level().allowsDataflow()) {
             return;
         }
         try {
-            RequestContext context = RequestContext.current();
+            RequestContext context = state.context();
             if (context == null || !context.isSampled()) {
                 return;
             }
             TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
             TaintedValue leftTaint = tracker.taintOf(left);
             TaintedValue rightTaint = tracker.taintOf(right);
             if (!leftTaint.isTainted() && !rightTaint.isTainted()) {
@@ -495,7 +477,7 @@ public final class AgentRuntime {
         } catch (Throwable t) {
             runtime.hookFailed(t);
         } finally {
-            exit();
+            state.exit();
         }
     }
 
@@ -545,11 +527,19 @@ public final class AgentRuntime {
      * @param constants values the recipe interleaves between the dynamic arguments
      */
     public static java.lang.invoke.CallSite wrapConcat(
-            java.lang.invoke.CallSite site, String recipe, Object[] constants) {
+            java.lang.invoke.CallSite site, String owner, String recipe, Object[] constants) {
+        ThreadState state = ThreadState.current();
         if (instance == null || site == null || CONCAT_TRACKER == null) {
             return site;
         }
-        if (!enter()) {
+        if (isPlatformClass(owner)) {
+            // The JDK concatenates constantly — in logging, formatting, exception messages,
+            // the class loader — and none of it is a place a customer's injection is written.
+            // Wrapping those sites cost more overhead than every other hook combined, for no
+            // detection whatsoever. Measured, not assumed: it was most of an 19% regression.
+            return site;
+        }
+        if (!state.enter()) {
             // The agent's own code concatenates strings. Rewriting a call site while already
             // inside the agent risks recursion during linkage, and the sites we would lose are
             // ours, not the application's.
@@ -581,12 +571,25 @@ public final class AgentRuntime {
             // An un-rewritten call site is a coverage gap. A broken one is a broken application.
             return site;
         } finally {
-            exit();
+            state.exit();
         }
     }
 
     private static String defaultRecipe(int arity) {
         return String.valueOf(RECIPE_ARGUMENT).repeat(arity);
+    }
+
+    /** Classes shipped with the platform, which never contain the customer's defects. */
+    private static boolean isPlatformClass(String name) {
+        if (name == null) {
+            return false;
+        }
+        return name.startsWith("java.")
+                || name.startsWith("javax.")
+                || name.startsWith("jdk.")
+                || name.startsWith("sun.")
+                || name.startsWith("com.sun.")
+                || name.startsWith("dev.aegis.");
     }
 
     /**
@@ -602,7 +605,10 @@ public final class AgentRuntime {
             Object[] constants,
             Object[] arguments)
             throws Throwable {
-        Object result = target.invoke(arguments);
+        // invokeExact, not invoke: the handle is generalized to (Object[])Object when the call
+        // site is rewritten, so the descriptor matches exactly and the JVM skips the asType
+        // adaptation it would otherwise insert on every single concatenation.
+        Object result = (Object) target.invokeExact(arguments);
         if (result instanceof String text) {
             onIndyConcat(text, recipe, constants, arguments);
         }
@@ -619,18 +625,22 @@ public final class AgentRuntime {
     private static void onIndyConcat(
             String result, String recipe, Object[] constants, Object[] arguments) {
         AgentRuntime runtime = instance;
-        if (runtime == null || !enter()) {
+        ThreadState state = ThreadState.current();
+        if (runtime == null || !state.enter()) {
             return;
         }
         try {
             if (!runtime.governor.level().allowsDataflow()) {
                 return;
             }
-            RequestContext context = RequestContext.current();
+            RequestContext context = state.context();
             if (context == null || !context.isSampled()) {
                 return;
             }
             TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
 
             boolean anyTainted = false;
             for (Object argument : arguments) {
@@ -677,7 +687,7 @@ public final class AgentRuntime {
         } catch (Throwable t) {
             runtime.hookFailed(t);
         } finally {
-            exit();
+            state.exit();
         }
     }
 
@@ -688,33 +698,36 @@ public final class AgentRuntime {
      * assembled across a dozen appends and materialized once by {@code toString()} still
      * arrives at the sink with correct offsets.
      *
-     * @param contentBefore the builder's content prior to this append, captured on entry
+     * @param lengthBefore the builder's length prior to this append, captured on entry
      */
-    public static void onBuilderAppend(Object builder, String contentBefore, Object appended) {
+    public static void onBuilderAppend(Object builder, int lengthBefore, Object appended) {
         AgentRuntime runtime = instance;
-        if (runtime == null || !enter()) {
+        ThreadState state = ThreadState.current();
+        if (runtime == null || !state.enter()) {
             return;
         }
         if (runtime == null || builder == null || !runtime.governor.level().allowsDataflow()) {
             return;
         }
         try {
-            RequestContext context = RequestContext.current();
+            RequestContext context = state.context();
             if (context == null || !context.isSampled()) {
                 return;
             }
             TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
             TaintedValue appendedTaint = tracker.taintOf(appended);
             TaintedValue builderTaint = tracker.taintOf(builder);
             if (!appendedTaint.isTainted() && !builderTaint.isTainted()) {
                 return;
             }
-            int lengthBefore = contentBefore == null ? 0 : contentBefore.length();
             tracker.track(builder, TaintedValue.concat(builderTaint, lengthBefore, appendedTaint));
         } catch (Throwable t) {
             runtime.hookFailed(t);
         } finally {
-            exit();
+            state.exit();
         }
     }
 
@@ -726,14 +739,15 @@ public final class AgentRuntime {
      */
     public static Runnable wrapForHandoff(Runnable task) {
         AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
         if (runtime == null || task == null) {
             return task;
         }
-        if (!enter()) {
+        if (!state.enter()) {
             return task;
         }
         try {
-            RequestContext context = RequestContext.current();
+            RequestContext context = state.context();
             if (context == null) {
                 return task;
             }
@@ -750,7 +764,7 @@ public final class AgentRuntime {
             runtime.hookFailed(t);
             return task;
         } finally {
-            exit();
+            state.exit();
         }
     }
 
@@ -764,14 +778,15 @@ public final class AgentRuntime {
     public static <T> java.util.concurrent.Callable<T> wrapForHandoff(
             java.util.concurrent.Callable<T> task) {
         AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
         if (runtime == null || task == null) {
             return task;
         }
-        if (!enter()) {
+        if (!state.enter()) {
             return task;
         }
         try {
-            RequestContext context = RequestContext.current();
+            RequestContext context = state.context();
             if (context == null) {
                 return task;
             }
@@ -787,25 +802,29 @@ public final class AgentRuntime {
             runtime.hookFailed(t);
             return task;
         } finally {
-            exit();
+            state.exit();
         }
     }
 
     /** A length-preserving transform such as {@code toUpperCase} or {@code intern}. */
     public static void onPreservingTransform(String result, Object source) {
         AgentRuntime runtime = instance;
-        if (runtime == null || !enter()) {
+        ThreadState state = ThreadState.current();
+        if (runtime == null || !state.enter()) {
             return;
         }
         if (runtime == null || result == null) {
             return;
         }
         try {
-            RequestContext context = RequestContext.current();
+            RequestContext context = state.context();
             if (context == null || !context.isSampled()) {
                 return;
             }
             TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
             TaintedValue taint = tracker.taintOf(source);
             if (taint.isTainted()) {
                 tracker.track(result, taint.preservingTransform());
@@ -813,25 +832,29 @@ public final class AgentRuntime {
         } catch (Throwable t) {
             runtime.hookFailed(t);
         } finally {
-            exit();
+            state.exit();
         }
     }
 
     /** {@code source.substring(from, to)}. */
     public static void onSubstring(String result, Object source, int from, int to) {
         AgentRuntime runtime = instance;
-        if (runtime == null || !enter()) {
+        ThreadState state = ThreadState.current();
+        if (runtime == null || !state.enter()) {
             return;
         }
         if (runtime == null || result == null) {
             return;
         }
         try {
-            RequestContext context = RequestContext.current();
+            RequestContext context = state.context();
             if (context == null || !context.isSampled()) {
                 return;
             }
             TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
             TaintedValue taint = tracker.taintOf(source);
             if (taint.isTainted()) {
                 tracker.track(result, taint.substring(from, to));
@@ -839,7 +862,7 @@ public final class AgentRuntime {
         } catch (Throwable t) {
             runtime.hookFailed(t);
         } finally {
-            exit();
+            state.exit();
         }
     }
 
@@ -851,18 +874,22 @@ public final class AgentRuntime {
      */
     public static void onSanitized(String result, Object source, RuleClass rule) {
         AgentRuntime runtime = instance;
-        if (runtime == null || !enter()) {
+        ThreadState state = ThreadState.current();
+        if (runtime == null || !state.enter()) {
             return;
         }
         if (runtime == null || result == null) {
             return;
         }
         try {
-            RequestContext context = RequestContext.current();
+            RequestContext context = state.context();
             if (context == null) {
                 return;
             }
             TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
             TaintedValue taint = tracker.taintOf(source);
             if (taint.isTainted()) {
                 tracker.track(result, taint.sanitizedFor(rule));
@@ -870,7 +897,7 @@ public final class AgentRuntime {
         } catch (Throwable t) {
             runtime.hookFailed(t);
         } finally {
-            exit();
+            state.exit();
         }
     }
 
@@ -884,21 +911,25 @@ public final class AgentRuntime {
      */
     public static Finding onSink(Object argument, RuleClass rule, String sinkSignature) {
         AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
         if (runtime == null || !(argument instanceof String value)) {
             return null;
         }
-        if (!enter()) {
+        if (!state.enter()) {
             return null;
         }
         if (!runtime.governor.level().allowsDataflow()) {
             return null;
         }
         try {
-            RequestContext context = RequestContext.current();
+            RequestContext context = state.context();
             if (context == null || !context.isSampled()) {
                 return null;
             }
             runtime.sinksEvaluated.incrementAndGet();
+            if (context.tracker().isEmpty()) {
+                return null;
+            }
 
             TaintedValue taint = context.tracker().taintOf(argument);
             if (!taint.isTainted()) {
@@ -927,7 +958,7 @@ public final class AgentRuntime {
             runtime.hookFailed(t);
             return null;
         } finally {
-            exit();
+            state.exit();
         }
     }
 
