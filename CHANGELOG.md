@@ -24,7 +24,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - **64 tests**: 61 unit (including randomised range round-trips) and 3 integration tests that
   launch a real JVM with the packaged agent against a real H2 database.
 
-### End-to-end result
+### In-process result (agent alone)
 
 A genuine SQL injection through a `StringBuilder` and a plain `Statement` is detected and
 reported as `sql-injection / CRITICAL / EXPLOITED`, with the tainted range pinpointing
