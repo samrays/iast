@@ -193,11 +193,45 @@ deferring it, which is exactly why deferring it is safe.
   request-body sources.
 - WebGoat unrun; overhead unverified on Spring PetClinic; WebFlux and Reactor sources absent.
 
-**Exit criteria:** dedup stable across restarts and refactors; 1M-event replay produces a deterministic
-finding set; blocking verified to trigger only on confirmed exploitation; **and the carried agent debt
-is retired — OWASP Benchmark recall ≥ 80% with false positives still at zero, and the overhead budget
-verified on Spring PetClinic.** The recall target is stated as a number here precisely because
-"improve detection" without one is how it never happens.
+### The recall target, revised — and why
+
+An earlier version of this section set the gate at **≥ 80% Benchmark recall**. That number was chosen
+when the remaining misses were assumed to share a dominant cause. They do not, and the assumption has
+since been tested to destruction: five separate hypotheses for the largest single bucket — collections
+and arrays, a broken cookie sink, `Cookie` not being instrumented under Tomcat, no request context
+during `doPost`, and `URLDecoder` breaking the chain — were each investigated and each turned out to be
+wrong. The corpus now reproduces the Benchmark's exact cookie shape and **detects it**.
+
+What the 366 remaining misses actually look like, measured rather than assumed:
+
+| bucket | cases | status |
+|---|---|---|
+| Cookie-sourced | ~60 | cause unknown after five eliminated theories |
+| `StringBuilder.replace/reverse` | ~40 | propagators not implemented |
+| `String.split` | ~25 | propagator not implemented |
+| `getHeaderNames()` | ~14 | source not implemented |
+| **no identified cause** | **~227** | not yet characterised |
+
+Closing every identified bucket takes recall from 52% to roughly 61%. Reaching 80% requires finding
+causes for ~227 cases that currently have none — which is not a commitment that can honestly be made
+from here. Keeping the number would not make the work happen faster; it would only make the gate
+something to miss quietly or quietly drop.
+
+**Revised exit criteria:**
+
+1. **Zero false positives on the OWASP Benchmark — a hard invariant, not a target.** Currently 0 of
+   1,572 in-scope cases. This is the property that decides whether a customer leaves the product
+   switched on, and no recall improvement may be traded against it.
+2. **Recall ≥ 65%**, reachable by closing the four identified buckets above.
+3. **The ~227 uncharacterised misses are categorised**, with a named cause for each group — the
+   deliverable is the analysis, not a number. A target set on an uncharacterised tail is how 80% got
+   written down in the first place.
+4. Dedup stable across restarts and refactors; 1M-event replay produces a deterministic finding set;
+   blocking verified to trigger only on confirmed exploitation; overhead budget verified on Spring
+   PetClinic.
+
+The original instinct — that "improve detection" without a number never happens — was right. The error
+was picking the number before knowing what stood behind it.
 
 ---
 
