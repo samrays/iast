@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 from ..domain.errors import BatchTooLargeError, InvalidEventError, QuotaExceededError
 from ..domain.events import EventType, RuntimeEvent, parse_event
-from ..domain.ports import DeduplicationCache, EventSink, QuotaLimiter
+from ..domain.ports import DeduplicationCache, EventSink, QuotaLimiter, StreamOrigin
 from ..domain.quota import SheddingPolicy
 from .context import AgentPrincipal
 
@@ -143,7 +143,14 @@ class IngestEvents:
         if publishable:
             # Raises SinkUnavailableError on failure, which surfaces as a retryable 503 and
             # leaves the events in the agent's spool.
-            await self._sink.publish(principal.organization_id, publishable)
+            await self._sink.publish(
+                StreamOrigin(
+                    organization_id=principal.organization_id,
+                    agent_id=principal.agent_id,
+                    environment_id=principal.environment_id,
+                ),
+                publishable,
+            )
             result.accepted = len(publishable)
             result.ack_cursor = publishable[-1].event_id
 

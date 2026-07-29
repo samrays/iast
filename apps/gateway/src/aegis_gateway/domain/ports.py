@@ -6,9 +6,25 @@ in-memory doubles without inheritance (ADR-0002).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from .events import RuntimeEvent
+
+
+@dataclass(frozen=True, slots=True)
+class StreamOrigin:
+    """Who produced a batch, taken entirely from the verified credential.
+
+    Every field here is stamped by the gateway and never read from the agent's payload. The
+    worker downstream trusts these to decide which tenant and which application a finding
+    belongs to, so letting an agent supply them would let it write findings into someone
+    else's account (threat T-06).
+    """
+
+    organization_id: str
+    agent_id: str
+    environment_id: str = ""
 
 
 @runtime_checkable
@@ -47,7 +63,7 @@ class EventSink(Protocol):
     port means an outage of the stream is a swappable adapter concern rather than a rewrite.
     """
 
-    async def publish(self, organization_id: str, events: list[RuntimeEvent]) -> None:
+    async def publish(self, origin: StreamOrigin, events: list[RuntimeEvent]) -> None:
         """Publish a batch.
 
         Raise :class:`~aegis_gateway.domain.errors.SinkUnavailableError` to tell the agent to

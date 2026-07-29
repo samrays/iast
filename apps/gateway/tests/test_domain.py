@@ -9,6 +9,7 @@ import pytest
 
 from aegis_gateway.domain.errors import InvalidEventError, SinkUnavailableError
 from aegis_gateway.domain.events import EventType, parse_event
+from aegis_gateway.domain.ports import StreamOrigin
 from aegis_gateway.domain.quota import SheddingPolicy, TokenBucket
 from aegis_gateway.infrastructure.limits import InMemoryQuotaLimiter, LruDeduplicationCache
 from aegis_gateway.infrastructure.sinks import FileEventSink, MemoryEventSink, build_sink
@@ -176,7 +177,7 @@ class TestSinks:
             },
             1,
         )
-        await sink.publish("org-1", [event])
+        await sink.publish(StreamOrigin("org-1", "agent-1"), [event])
         assert sink.published == [("org-1", event)]
 
     async def test_file_sink_writes_the_stream_shape(self, tmp_path: Path) -> None:
@@ -192,7 +193,7 @@ class TestSinks:
             },
             1,
         )
-        await sink.publish("org-1", [event])
+        await sink.publish(StreamOrigin("org-1", "agent-1"), [event])
         await sink.close()
 
         written = json.loads(target.read_text(encoding="utf-8").strip())
@@ -215,7 +216,7 @@ class TestSinks:
             1,
         )
         with pytest.raises(SinkUnavailableError):
-            await sink.publish("org-1", [event])
+            await sink.publish(StreamOrigin("org-1", "agent-1"), [event])
 
     def test_build_sink_chooses_by_scheme(self, tmp_path: Path) -> None:
         assert isinstance(build_sink("memory://"), MemoryEventSink)

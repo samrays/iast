@@ -19,16 +19,18 @@ from ..domain.events import RuntimeEvent
 DEFAULT_TOPIC = "runtime-events"
 
 
-def _serialize(organization_id: str, event: RuntimeEvent) -> bytes:
+def _serialize(origin: StreamOrigin, event: RuntimeEvent) -> bytes:
     """The envelope the worker consumes.
 
-    ``organization_id`` is stamped here from the verified credential and never taken from the
-    agent's payload — an agent must not be able to write into another tenant's stream by
-    lying about who it is.
+    Every identity field is stamped here from the verified credential and never taken from
+    the agent's payload — an agent must not be able to write into another tenant's stream, or
+    attribute its findings to another application, by lying about who it is.
     """
     return json.dumps(
         {
-            "organization_id": organization_id,
+            "organization_id": origin.organization_id,
+            "agent_id": origin.agent_id,
+            "environment_id": origin.environment_id,
             "event_id": event.event_id,
             "type": event.type.value,
             "occurred_at_ms": event.occurred_at_ms,
@@ -48,12 +50,12 @@ class MemoryEventSink:
         self.published: list[tuple[str, RuntimeEvent]] = []
         self.fail_next = False
 
-    async def publish(self, organization_id: str, events: list[RuntimeEvent]) -> None:
+    async def publish(self, origin: StreamOrigin, events: list[RuntimeEvent]) -> None:
         if self.fail_next:
             self.fail_next = False
             raise SinkUnavailableError
         for event in events:
-            self.published.append((organization_id, event))
+            self.published.append((origin.organization_id, event))
 
     async def close(self) -> None:
         return None
@@ -70,8 +72,8 @@ class FileEventSink:
         self._path = path
         self._lock = asyncio.Lock()
 
-    async def publish(self, organization_id: str, events: list[RuntimeEvent]) -> None:
-        payload = b"\n".join(_serialize(organization_id, event) for event in events) + b"\n"
+    async def publish(self, origin: StreamOrigin, events: list[RuntimeEvent]) -> None:
+        payload = b"\n".join(_serialize(origin, event) for event in events) + b"\n"
         try:
             async with self._lock:
                 self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -129,13 +131,13 @@ class KafkaEventSink:
             await self._producer.start()
             self._started = True
 
-    async def publish(self, organization_id: str, events: list[RuntimeEvent]) -> None:
+    async def publish(self, origin: StreamOrigin, events: list[RuntimeEvent]) -> None:
         await self.start()
         try:
             for event in events:
                 await self._producer.send_and_wait(
                     self._topic,
-                    value=_serialize(organization_id, event),
+                    value=_serialize(origin, event),
                     key=event.partition_key.encode("utf-8"),
                 )
         except Exception as exc:
