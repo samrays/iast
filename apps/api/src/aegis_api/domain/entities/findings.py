@@ -101,11 +101,17 @@ _ALLOWED_TRANSITIONS: dict[FindingStatus, frozenset[FindingStatus]] = {
 }
 
 
-def stack_fingerprint(frames: list[tuple[str, str, bool]], depth: int = 5) -> str:
+def stack_fingerprint(frames: list[tuple[str, str, bool]], depth: int = 1) -> str:
     """Hash the application's own call path to the sink (ADR-0009).
 
     :param frames: ``(declaring_class, method_name, is_application_code)`` in call order,
         innermost first, exactly as the agent captured them.
+
+    Only the **innermost** application frame counts, per ADR-0012. That is the line the developer
+    edits — the concatenation, the ``exec``, the file open — and frames above it describe how it was
+    reached, which is context worth showing and wrong to put in identity. Hashing five frames, as
+    ADR-0009 originally specified, split one vulnerable line across a finding per call path: the
+    developer fixed the line and watched the other rows stay open.
 
     Framework and standard-library frames are dropped, and **line numbers never reach this
     function at all**. Including them would resurrect every finding on the next reformat and

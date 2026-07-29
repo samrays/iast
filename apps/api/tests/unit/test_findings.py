@@ -60,14 +60,33 @@ class TestStackFingerprint:
         without = stack_fingerprint([f for f in APPLICATION_FRAMES if f[2]])
         assert with_framework == without
 
-    def test_is_order_sensitive(self) -> None:
-        # Two different call paths to the same sink are two different defects.
+    def test_which_frame_is_innermost_matters(self) -> None:
+        # Reversing the stack changes which line is the vulnerable one, so the identity changes.
         reversed_frames = list(reversed([f for f in APPLICATION_FRAMES if f[2]]))
         assert stack_fingerprint(APPLICATION_FRAMES) != stack_fingerprint(reversed_frames)
 
-    def test_ignores_frames_below_the_depth_limit(self) -> None:
+    def test_ignores_frames_above_the_innermost(self) -> None:
         deep = [(f"com.acme.Layer{i}", "call", True) for i in range(12)]
-        assert stack_fingerprint(deep) == stack_fingerprint(deep[:5])
+        assert stack_fingerprint(deep) == stack_fingerprint(deep[:1])
+
+    def test_two_call_paths_through_one_line_are_one_defect(self) -> None:
+        # The case that prompted ADR-0012. A helper reached from two controllers is one broken
+        # line, and fixing it must close one row rather than leave the second open.
+        via_search = [
+            ("com.acme.UserRepository", "buildQuery", True),
+            ("com.acme.SearchController", "search", True),
+        ]
+        via_export = [
+            ("com.acme.UserRepository", "buildQuery", True),
+            ("com.acme.ExportController", "export", True),
+        ]
+        assert stack_fingerprint(via_search) == stack_fingerprint(via_export)
+
+    def test_genuinely_different_lines_stay_distinct(self) -> None:
+        # The other half of the trade: collapsing call paths must not collapse defects.
+        assert stack_fingerprint([("com.acme.UserRepository", "buildQuery", True)]) != (
+            stack_fingerprint([("com.acme.ReportRepository", "buildQuery", True)])
+        )
 
     def test_a_stack_with_no_application_frames_still_hashes(self) -> None:
         # Third-party code calling a sink is a real, if unactionable, finding. It must not

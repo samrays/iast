@@ -1,6 +1,6 @@
 # ADR-0009: Deterministic finding identity and deduplication
 
-- **Status:** Accepted
+- **Status:** Accepted, amended by [ADR-0012](0012-finding-identity-depth.md) (frame depth 5 -> 1)
 - **Date:** 2026-07-27
 - **Deciders:** Detection research, Platform architecture
 
