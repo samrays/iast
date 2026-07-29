@@ -156,6 +156,14 @@ public final class SinkDetector {
             return frames;
         }
         for (StackTraceElement element : stack) {
+            // The agent's own frames are an implementation detail of how the stack was
+            // captured, not part of the customer's call path. Leaving them in puts
+            // `AgentRuntime#onSink` at the top of the evidence a developer reads, which is
+            // both noise and a small confession that the tool does not know what it is
+            // looking at. Found by looking at a real finding in the console.
+            if (element.getClassName().startsWith("dev.aegis.agent.")) {
+                continue;
+            }
             boolean application = isApplicationCode(element.getClassName());
             frames.add(
                     new Finding.StackFrame(

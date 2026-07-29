@@ -183,9 +183,13 @@ class ProcessRuntimeEvents:
             # accepting would let anything holding a token invent an application.
             raise EventRejectedError(f"agent {agent_id} is not registered")
 
-        hit = record.get("payload", {}).get("taint_hit")
-        if not isinstance(hit, dict):
-            raise EventRejectedError("taint hit event has no taint_hit payload")
+        # The gateway unwraps the agent's `taint_hit` object into `payload` — the envelope's
+        # `type` already says what the payload is, so nesting it again would be redundant.
+        # Reading one level too deep here cost a live end-to-end run to find, because the test
+        # fixtures were written from the same wrong assumption and agreed with it.
+        hit = record.get("payload")
+        if not isinstance(hit, dict) or "sink_signature" not in hit:
+            raise EventRejectedError("taint hit event carries no usable payload")
 
         rule_key = str(hit.get("rule_key") or "").strip().lower()
         if rule_key not in TITLE_BY_RULE:

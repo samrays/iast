@@ -48,47 +48,45 @@ def taint_hit(
         "trace_id": uuid4().hex,
         "replayed": False,
         "payload": {
-            "taint_hit": {
-                "rule_key": rule_key,
-                "severity": severity,
-                "confidence": confidence,
-                "sink_signature": sink,
-                "sink_argument": "SELECT name FROM users WHERE name = '' OR 1=1--'",
-                "stack_fingerprint": "ignored-by-the-worker",
-                "imprecise": False,
-                "ranges": [
-                    {
-                        "start": 37,
-                        "length": 10,
-                        "source": "SOURCE_KIND_PARAMETER",
-                        "source_name": "name",
-                    }
-                ],
-                "stack": [
-                    {
-                        "declaring_class": "com.acme.UserRepository",
-                        "method_name": method,
-                        "line_number": 42,
-                        "application_code": True,
-                    },
-                    {
-                        "declaring_class": "org.eclipse.jetty.server.Handler",
-                        "method_name": "handle",
-                        "line_number": 900,
-                        "application_code": False,
-                    },
-                ],
-                "sanitizers_applied": [],
-                "request": {
-                    "method": "GET",
-                    "path": route,
-                    "route_template": route,
-                    "remote_addr": "203.0.113.7",
-                    "parameters": {"name": "' OR 1=1--"},
-                    "headers": {},
-                    "body_excerpt": "",
+            "rule_key": rule_key,
+            "severity": severity,
+            "confidence": confidence,
+            "sink_signature": sink,
+            "sink_argument": "SELECT name FROM users WHERE name = '' OR 1=1--'",
+            "stack_fingerprint": "ignored-by-the-worker",
+            "imprecise": False,
+            "ranges": [
+                {
+                    "start": 37,
+                    "length": 10,
+                    "source": "SOURCE_KIND_PARAMETER",
+                    "source_name": "name",
+                }
+            ],
+            "stack": [
+                {
+                    "declaring_class": "com.acme.UserRepository",
+                    "method_name": method,
+                    "line_number": 42,
+                    "application_code": True,
                 },
-            }
+                {
+                    "declaring_class": "org.eclipse.jetty.server.Handler",
+                    "method_name": "handle",
+                    "line_number": 900,
+                    "application_code": False,
+                },
+            ],
+            "sanitizers_applied": [],
+            "request": {
+                "method": "GET",
+                "path": route,
+                "route_template": route,
+                "remote_addr": "203.0.113.7",
+                "parameters": {"name": "' OR 1=1--"},
+                "headers": {},
+                "body_excerpt": "",
+            },
         },
     }
 
@@ -286,8 +284,8 @@ class TestMalformedInput:
         "mutate,expected",
         [
             (lambda e: e.update(organization_id="not-a-uuid"), "rejected"),
-            (lambda e: e["payload"].pop("taint_hit"), "rejected"),
-            (lambda e: e["payload"]["taint_hit"].update(rule_key="made-up-rule"), "rejected"),
+            (lambda e: e["payload"].pop("sink_signature"), "rejected"),
+            (lambda e: e["payload"].update(rule_key="made-up-rule"), "rejected"),
             (lambda e: e.update(type="EVENT_TYPE_ROUTE"), "ignored"),
         ],
     )
@@ -311,7 +309,7 @@ class TestMalformedInput:
         agent_id, _ = await register_agent(client, container, tenant)
         good = taint_hit(organization_id=tenant.organization_id, agent_id=agent_id)
         bad = taint_hit(organization_id=tenant.organization_id, agent_id=agent_id)
-        bad["payload"]["taint_hit"]["rule_key"] = "nonsense"
+        bad["payload"]["rule_key"] = "nonsense"
 
         result = await ProcessRuntimeEvents(uow_factory=container.unit_of_work).execute([bad, good])
 
