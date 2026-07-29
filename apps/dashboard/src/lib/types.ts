@@ -59,7 +59,9 @@ export interface MfaChallengeResponse {
 
 export type LoginResult = TokenResponse | MfaChallengeResponse;
 
-export function isMfaChallenge(result: LoginResult): result is MfaChallengeResponse {
+export function isMfaChallenge(
+  result: LoginResult,
+): result is MfaChallengeResponse {
   return "mfa_required" in result && result.mfa_required;
 }
 
@@ -149,7 +151,12 @@ export type Language = (typeof LANGUAGES)[number];
 export const CRITICALITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
 export type Criticality = (typeof CRITICALITIES)[number];
 
-export const ENVIRONMENT_KINDS = ["DEVELOPMENT", "QA", "STAGING", "PRODUCTION"] as const;
+export const ENVIRONMENT_KINDS = [
+  "DEVELOPMENT",
+  "QA",
+  "STAGING",
+  "PRODUCTION",
+] as const;
 export type EnvironmentKind = (typeof ENVIRONMENT_KINDS)[number];
 
 export const PROTECTION_MODES = ["OFF", "MONITOR", "BLOCK"] as const;
@@ -229,4 +236,85 @@ export interface ChainVerification {
   intact: boolean;
   entries_checked: number;
   first_broken_sequence: number | null;
+}
+
+// --- findings ----------------------------------------------------------------------
+
+export type FindingStatus =
+  "OPEN" | "CONFIRMED" | "REMEDIATED" | "FALSE_POSITIVE" | "ACCEPTED_RISK";
+
+export type Severity = "INFO" | "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
+export interface RiskFactor {
+  name: string;
+  delta: number;
+  reason: string;
+}
+
+export interface Finding {
+  id: Uuid;
+  application_id: Uuid;
+  rule_key: string;
+  title: string;
+  severity: Severity;
+  confidence: "SUSPECTED" | "CONFIRMED" | "EXPLOITED";
+  status: FindingStatus;
+  risk_score: number;
+  risk_factors: RiskFactor[];
+  occurrence_count: number;
+  suppressed_occurrence_count: number;
+  environments_seen: string[];
+  route_templates: string[];
+  sink_signature: string;
+  source_kind: string;
+  cwe_id: number | null;
+  regressed: boolean;
+  first_seen_at: IsoDateTime | null;
+  last_seen_at: IsoDateTime | null;
+  accepted_until: IsoDateTime | null;
+  triage_note: string;
+}
+
+export interface TaintRange {
+  start: number;
+  length: number;
+  source: string;
+  source_name: string;
+}
+
+export interface StackFrame {
+  declaring_class: string;
+  method_name: string;
+  line_number: number;
+  application_code: boolean;
+}
+
+export interface Occurrence {
+  id: Uuid;
+  environment: string;
+  trace_id: string;
+  request_method: string;
+  request_path: string;
+  route_template: string;
+  sink_argument: string;
+  tainted_ranges: TaintRange[];
+  stack_frames: StackFrame[];
+  remote_address: string;
+  attack_detected: boolean;
+  observed_at: IsoDateTime | null;
+}
+
+export interface FindingComment {
+  id: Uuid;
+  author_id: Uuid | null;
+  author_label: string;
+  body: string;
+  status_from: string | null;
+  status_to: string | null;
+  created_at: IsoDateTime | null;
+}
+
+export interface FindingDetail extends Finding {
+  occurrences: Occurrence[];
+  comments: FindingComment[];
 }

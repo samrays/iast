@@ -18,17 +18,25 @@ const badgeVariants = cva(
         default: "border-transparent bg-primary/10 text-primary",
         secondary: "border-transparent bg-secondary text-secondary-foreground",
         outline: "border-border text-muted-foreground",
-        critical: "border-transparent bg-severity-critical-surface text-severity-critical",
+        critical:
+          "border-transparent bg-severity-critical-surface text-severity-critical",
         high: "border-transparent bg-severity-high-surface text-severity-high",
-        medium: "border-transparent bg-severity-medium-surface text-severity-medium",
+        medium:
+          "border-transparent bg-severity-medium-surface text-severity-medium",
         low: "border-transparent bg-severity-low-surface text-severity-low",
         info: "border-transparent bg-severity-info-surface text-severity-info",
-        online: "border-transparent bg-status-online-surface text-status-online",
-        degraded: "border-transparent bg-status-degraded-surface text-status-degraded",
-        offline: "border-transparent bg-status-offline-surface text-status-offline",
-        disabled: "border-transparent bg-status-disabled-surface text-status-disabled",
-        success: "border-transparent bg-status-online-surface text-status-online",
-        danger: "border-transparent bg-severity-critical-surface text-severity-critical",
+        online:
+          "border-transparent bg-status-online-surface text-status-online",
+        degraded:
+          "border-transparent bg-status-degraded-surface text-status-degraded",
+        offline:
+          "border-transparent bg-status-offline-surface text-status-offline",
+        disabled:
+          "border-transparent bg-status-disabled-surface text-status-disabled",
+        success:
+          "border-transparent bg-status-online-surface text-status-online",
+        danger:
+          "border-transparent bg-severity-critical-surface text-severity-critical",
       },
     },
     defaultVariants: { variant: "default" },
@@ -36,11 +44,12 @@ const badgeVariants = cva(
 );
 
 export interface BadgeProps
-  extends HTMLAttributes<HTMLSpanElement>,
-    VariantProps<typeof badgeVariants> {}
+  extends HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badgeVariants> {}
 
 export function Badge({ className, variant, ...props }: BadgeProps) {
-  return <span className={cn(badgeVariants({ variant }), className)} {...props} />;
+  return (
+    <span className={cn(badgeVariants({ variant }), className)} {...props} />
+  );
 }
 
 /** Map an agent status onto its badge variant, in one place. */
@@ -95,6 +104,33 @@ export function outcomeVariant(outcome: string): BadgeProps["variant"] {
       return "danger";
     case "FAILURE":
       return "medium";
+    default:
+      return "outline";
+  }
+}
+
+/** Finding severity. Shares the palette with criticality so "critical" means one colour. */
+export function severityVariant(severity: string): BadgeProps["variant"] {
+  return criticalityVariant(severity);
+}
+
+/**
+ * Finding status.
+ *
+ * Suppressed states are deliberately muted rather than green: a false positive is not an
+ * achievement, and colouring it like one invites closing findings to clear the board.
+ */
+export function findingStatusVariant(status: string): BadgeProps["variant"] {
+  switch (status) {
+    case "OPEN":
+      return "critical";
+    case "CONFIRMED":
+      return "high";
+    case "REMEDIATED":
+      return "success";
+    case "FALSE_POSITIVE":
+    case "ACCEPTED_RISK":
+      return "disabled";
     default:
       return "outline";
   }

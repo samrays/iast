@@ -22,6 +22,10 @@ import type {
   CurrentPrincipal,
   EnvironmentKind,
   EnvironmentSummary,
+  Finding,
+  FindingComment,
+  FindingDetail,
+  FindingStatus,
   Language,
   LoginResult,
   LogoutResponse,
@@ -137,12 +141,15 @@ export async function refreshAccessToken(): Promise<boolean> {
 
   refreshInFlight = (async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}${API_PREFIX}/auth/refresh`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({}),
-      });
+      const response = await fetch(
+        `${API_BASE_URL}${API_PREFIX}/auth/refresh`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({}),
+        },
+      );
       if (!response.ok) {
         tokenStore.clear();
         return false;
@@ -165,7 +172,10 @@ export async function refreshAccessToken(): Promise<boolean> {
 interface RequestOptions {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   body?: unknown;
-  query?: Record<string, string | number | boolean | string[] | undefined | null>;
+  query?: Record<
+    string,
+    string | number | boolean | string[] | undefined | null
+  >;
   /** Skip the Authorization header and the refresh dance (login, MFA verify). */
   anonymous?: boolean;
   signal?: AbortSignal;
@@ -184,7 +194,10 @@ function buildUrl(path: string, query: RequestOptions["query"]): string {
   return url.toString();
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+async function request<T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<T> {
   const { method = "GET", body, query, anonymous = false, signal } = options;
 
   if (!anonymous && tokenStore.isStale()) {
@@ -218,7 +231,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   if (!response.ok) {
-    throw new ApiError(response.status, await readProblem(response), response.statusText);
+    throw new ApiError(
+      response.status,
+      await readProblem(response),
+      response.statusText,
+    );
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
@@ -252,17 +269,20 @@ export const api = {
       password: string;
       full_name: string;
     }) =>
-      request<{ organization: OrganizationSummary; user_id: Uuid; email: string; tokens: TokenResponse }>(
-        "/auth/register",
-        { method: "POST", anonymous: true, body: payload },
-      ),
+      request<{
+        organization: OrganizationSummary;
+        user_id: Uuid;
+        email: string;
+        tokens: TokenResponse;
+      }>("/auth/register", { method: "POST", anonymous: true, body: payload }),
 
     me: (signal?: AbortSignal) =>
       request<CurrentPrincipal>("/auth/me", signal ? { signal } : {}),
 
     logout: () => request<LogoutResponse>("/auth/logout", { method: "POST" }),
 
-    logoutAll: () => request<LogoutResponse>("/auth/logout-all", { method: "POST" }),
+    logoutAll: () =>
+      request<LogoutResponse>("/auth/logout-all", { method: "POST" }),
 
     changePassword: (currentPassword: string, newPassword: string) =>
       request<LogoutResponse>("/auth/password/change", {
@@ -271,23 +291,34 @@ export const api = {
       }),
 
     enrolMfa: (password: string) =>
-      request<MfaEnrolResponse>("/auth/mfa/enroll", { method: "POST", body: { password } }),
+      request<MfaEnrolResponse>("/auth/mfa/enroll", {
+        method: "POST",
+        body: { password },
+      }),
 
     confirmMfa: (code: string) =>
       request<void>("/auth/mfa/confirm", { method: "POST", body: { code } }),
 
     disableMfa: (password: string) =>
-      request<void>("/auth/mfa/disable", { method: "POST", body: { password } }),
+      request<void>("/auth/mfa/disable", {
+        method: "POST",
+        body: { password },
+      }),
   },
 
   organization: {
     current: () => request<OrganizationSummary>("/organizations/current"),
 
     update: (payload: { name?: string; settings?: Record<string, unknown> }) =>
-      request<OrganizationSummary>("/organizations/current", { method: "PATCH", body: payload }),
+      request<OrganizationSummary>("/organizations/current", {
+        method: "PATCH",
+        body: payload,
+      }),
 
     members: (params: { limit?: number; cursor?: string } = {}) =>
-      request<Page<MemberSummary>>("/organizations/current/members", { query: params }),
+      request<Page<MemberSummary>>("/organizations/current/members", {
+        query: params,
+      }),
 
     invite: (payload: { email: string; full_name: string; role_ids: Uuid[] }) =>
       request<MemberSummary>("/organizations/current/members/invite", {
@@ -302,12 +333,21 @@ export const api = {
       }),
 
     removeMember: (membershipId: Uuid) =>
-      request<void>(`/organizations/current/members/${membershipId}`, { method: "DELETE" }),
+      request<void>(`/organizations/current/members/${membershipId}`, {
+        method: "DELETE",
+      }),
 
     roles: () => request<RoleSummary[]>("/organizations/current/roles"),
 
-    createRole: (payload: { name: string; description: string; permissions: string[] }) =>
-      request<RoleSummary>("/organizations/current/roles", { method: "POST", body: payload }),
+    createRole: (payload: {
+      name: string;
+      description: string;
+      permissions: string[];
+    }) =>
+      request<RoleSummary>("/organizations/current/roles", {
+        method: "POST",
+        body: payload,
+      }),
 
     updateRole: (
       roleId: Uuid,
@@ -319,7 +359,9 @@ export const api = {
       }),
 
     deleteRole: (roleId: Uuid) =>
-      request<void>(`/organizations/current/roles/${roleId}`, { method: "DELETE" }),
+      request<void>(`/organizations/current/roles/${roleId}`, {
+        method: "DELETE",
+      }),
   },
 
   permissions: {
@@ -329,15 +371,24 @@ export const api = {
   apiKeys: {
     list: () => request<ApiKeySummary[]>("/api-keys"),
 
-    create: (payload: { name: string; permissions: string[]; expires_in_days: number | null }) =>
-      request<ApiKeyIssued>("/api-keys", { method: "POST", body: payload }),
+    create: (payload: {
+      name: string;
+      permissions: string[];
+      expires_in_days: number | null;
+    }) => request<ApiKeyIssued>("/api-keys", { method: "POST", body: payload }),
 
-    revoke: (id: Uuid) => request<void>(`/api-keys/${id}`, { method: "DELETE" }),
+    revoke: (id: Uuid) =>
+      request<void>(`/api-keys/${id}`, { method: "DELETE" }),
   },
 
   applications: {
     list: (
-      params: { limit?: number; cursor?: string; q?: string; tag?: string[] } = {},
+      params: {
+        limit?: number;
+        cursor?: string;
+        q?: string;
+        tag?: string[];
+      } = {},
     ) => request<Page<ApplicationSummary>>("/applications", { query: params }),
 
     get: (id: Uuid) => request<ApplicationSummary>(`/applications/${id}`),
@@ -350,7 +401,11 @@ export const api = {
       repository_url?: string | null;
       description: string;
       environments: Array<{ kind: EnvironmentKind; internet_facing: boolean }>;
-    }) => request<ApplicationSummary>("/applications", { method: "POST", body: payload }),
+    }) =>
+      request<ApplicationSummary>("/applications", {
+        method: "POST",
+        body: payload,
+      }),
 
     update: (
       id: Uuid,
@@ -361,11 +416,17 @@ export const api = {
         repository_url?: string | null;
         description?: string;
       },
-    ) => request<ApplicationSummary>(`/applications/${id}`, { method: "PATCH", body: payload }),
+    ) =>
+      request<ApplicationSummary>(`/applications/${id}`, {
+        method: "PATCH",
+        body: payload,
+      }),
 
-    remove: (id: Uuid) => request<void>(`/applications/${id}`, { method: "DELETE" }),
+    remove: (id: Uuid) =>
+      request<void>(`/applications/${id}`, { method: "DELETE" }),
 
-    environments: (id: Uuid) => request<EnvironmentSummary[]>(`/applications/${id}/environments`),
+    environments: (id: Uuid) =>
+      request<EnvironmentSummary[]>(`/applications/${id}/environments`),
 
     addEnvironment: (
       id: Uuid,
@@ -391,8 +452,46 @@ export const api = {
 
     get: (id: Uuid) => request<AgentSummary>(`/agents/${id}`),
 
-    update: (id: Uuid, payload: { enabled?: boolean; pinned_version?: string | null }) =>
-      request<AgentSummary>(`/agents/${id}`, { method: "PATCH", body: payload }),
+    update: (
+      id: Uuid,
+      payload: { enabled?: boolean; pinned_version?: string | null },
+    ) =>
+      request<AgentSummary>(`/agents/${id}`, {
+        method: "PATCH",
+        body: payload,
+      }),
+  },
+
+  findings: {
+    list: (
+      params: {
+        limit?: number;
+        cursor?: string;
+        status?: string[];
+        severity?: string[];
+        rule_key?: string;
+        application_id?: string;
+        environment?: string;
+        search?: string;
+      } = {},
+    ) => request<Page<Finding>>("/findings", { query: params }),
+
+    get: (id: string) => request<FindingDetail>(`/findings/${id}`),
+
+    triage: (
+      id: string,
+      body: {
+        status: FindingStatus;
+        note?: string;
+        accepted_for_days?: number;
+      },
+    ) => request<Finding>(`/findings/${id}`, { method: "PATCH", body }),
+
+    comment: (id: string, body: string) =>
+      request<FindingComment>(`/findings/${id}/comments`, {
+        method: "POST",
+        body: { body },
+      }),
   },
 
   audit: {

@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   ScrollText,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   Users,
   type LucideIcon,
@@ -35,6 +36,13 @@ export const NAV_SECTIONS: NavSection[] = [
         label: "Overview",
         icon: LayoutDashboard,
         description: "Portfolio posture and fleet health at a glance",
+      },
+      {
+        href: "/findings",
+        label: "Findings",
+        icon: ShieldAlert,
+        requires: [Permission.FINDING_READ],
+        description: "Vulnerabilities observed in running applications",
       },
       {
         href: "/applications",
@@ -102,7 +110,9 @@ export function visibleSections(permissions: string[]): NavSection[] {
   return NAV_SECTIONS.map((section) => ({
     ...section,
     items: section.items.filter(
-      (item) => !item.requires || item.requires.some((permission) => permissions.includes(permission)),
+      (item) =>
+        !item.requires ||
+        item.requires.some((permission) => permissions.includes(permission)),
     ),
   })).filter((section) => section.items.length > 0);
 }
