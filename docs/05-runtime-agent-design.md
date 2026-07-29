@@ -198,15 +198,34 @@ positives earn.
 every case threw `CommunicationException` at `getDirContext()` before reaching a sink. Excluding it,
 recall is 53.8%.
 
-**Recall is 52%, and the remaining misses are known rather than mysterious.** In rough order of
-how many cases they account for:
+**Recall is 52%. The 366 remaining misses have been characterised** — every group below has a named
+cause, measured by cross-referencing each missed case's source against the cases that were found.
 
-- **Collection and array propagation.** A value stored in a `List`, `Map` or array and read back out
-  loses its taint. The table is keyed on object identity, so the container is tracked and its
-  contents are not.
-- **`String.format`, `split`, `replace`, `StringTokenizer`.** Reshaping propagators that exist for
-  `URLDecoder` but have not been generalised.
-- **Request body sources** — `getReader` and `getInputStream`, currently reported as a coverage gap
+| # | Cause | Cases | Kind |
+|---|---|---|---|
+| 1 | `getParameterValues` with no intervening transform | ~40 | **unexplained — largest group, needs a trace** |
+| 2 | `Base64.decode` → `byte[]` → `new String(bytes)` | ~32 | missing propagator pair |
+| 3 | ESAPI encoder methods used as pass-throughs | ~29 | missing propagators |
+| 4 | `getQueryString` (with and without `substring`) | ~31 | unexplained; the source is hooked |
+| 5 | `getHeader`/`getHeaders` beyond the enumeration wrapper | ~39 | partially addressed |
+| 6 | Cookie-sourced | ~60 | **unexplained — five theories eliminated** |
+| 7 | `StringBuilder.replace`/`reverse` | ~40 | missing propagators |
+| 8 | `String.split` | ~25 | missing propagator |
+| 9 | `getHeaderNames()` | ~14 | source not implemented |
+
+**Groups 2, 3, 7 and 8 are implementable now** — roughly 126 cases, all of them the same shape of work
+as the `URLDecoder` propagator that took recall from 35.8% to 52.0%. `Base64` in particular is a chain
+the engine already almost handles: `String.getBytes` propagates for deserialization, so only
+`Base64.Decoder.decode` and `new String(byte[])` are missing.
+
+**Groups 1, 4 and 6 are unexplained and must be traced, not guessed at.** All three involve sources
+that are hooked and demonstrably work in the corpus. Five separate hypotheses for group 6 were
+investigated and every one was wrong, which is the reason this table exists: a target set over an
+uncharacterised tail is a target set over an assumption.
+
+Two further gaps, known and unmeasured against the Benchmark:
+
+- **Request-body sources** — `getReader` and `getInputStream`, currently reported as a coverage gap
   rather than tracked.
 - **Second-order flows** through session attributes and the database.
 
