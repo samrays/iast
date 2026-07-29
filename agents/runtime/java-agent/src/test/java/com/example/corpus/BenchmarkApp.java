@@ -11,6 +11,7 @@ import java.io.PrintWriter;
 import java.io.StringReader;
 import java.net.URI;
 import java.net.URL;
+import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -129,6 +130,7 @@ public final class BenchmarkApp {
 
         // --- Cookie as a source -----------------------------------------------------------
         register("/cookie/sql", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
+        register("/cookie/decoded", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
         register("/cookie/constant", Expectation.SAFE, "", SQL_PAYLOAD);
 
         // --- Reads a source and reaches nothing -------------------------------------------
@@ -261,6 +263,7 @@ public final class BenchmarkApp {
                 case "/deser/read" -> deserializeFromInput(name);
                 case "/deser/constant" -> deserializeConstant(name);
                 case "/cookie/sql" -> cookieInjection(request);
+                case "/cookie/decoded" -> cookieDecoded(request);
                 case "/cookie/constant" -> cookieConstant(request);
                 case "/noop" -> "seen:" + name.length();
                 default -> throw new IllegalStateException("unmapped case " + path);
@@ -341,6 +344,20 @@ public final class BenchmarkApp {
          */
         private String cookieInjection(HttpServletRequest request) throws Exception {
             String value = cookie(request, "name");
+            StringBuilder sql = new StringBuilder("SELECT name FROM users WHERE name = '");
+            sql.append(value).append("'");
+            return query(sql.toString());
+        }
+
+        /**
+         * The OWASP Benchmark's exact cookie shape: read, URL-decode, concatenate.
+         *
+         * <p>The only difference between this and {@link #cookieInjection}, which the agent
+         * detects, is the decode step — so if the Benchmark's 60 cookie cases fail and this
+         * one does too, the decode is where the chain breaks.
+         */
+        private String cookieDecoded(HttpServletRequest request) throws Exception {
+            String value = URLDecoder.decode(cookie(request, "name"), StandardCharsets.UTF_8);
             StringBuilder sql = new StringBuilder("SELECT name FROM users WHERE name = '");
             sql.append(value).append("'");
             return query(sql.toString());
