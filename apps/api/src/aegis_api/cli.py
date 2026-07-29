@@ -43,7 +43,11 @@ def _run(procedure: Callable[[Container], Awaitable[T]]) -> T:
 @app.command()
 def seed(
     organization: str = typer.Option("Aegis Demo", help="Organization display name."),
-    email: str = typer.Option("owner@aegis.local", help="Owner email address."),
+    # `.example` rather than `.local`: an IANA-reserved TLD that can never collide with a real
+    # domain, and — the part that actually matters — one the login endpoint's EmailStr accepts.
+    # The previous default seeded an owner who could not sign in, which is the first thing a new
+    # user hits and the last thing they should have to debug.
+    email: str = typer.Option("owner@aegis.example", help="Owner email address."),
     password: str = typer.Option("", help="Owner password. Generated when omitted."),
     full_name: str = typer.Option("Platform Owner", help="Owner display name."),
     tier: str = typer.Option("ENTERPRISE", help="Licence tier for the seeded organization."),
