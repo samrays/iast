@@ -174,6 +174,44 @@ Dataflow only, and all eleven of its rule classes:
 | `log-injection` | SLF4J and `java.util.logging` | — |
 | `unsafe-deserialization` | `new ObjectInputStream(in)` | — |
 
+### Measured against the OWASP Benchmark
+
+All 2,740 cases of OWASP Benchmark v1.2, run against Tomcat 9 with the agent attached and scored
+against the published answer key (`scripts/benchmark/run_owasp_benchmark.py`):
+
+| Category | Cases | Recall | False positives |
+|---|---|---|---|
+| `xpathi` | 35 | 66.7% | 0% |
+| `xss` | 455 | 61.4% | 0% |
+| `sqli` | 504 | 58.8% | 0% |
+| `cmdi` | 251 | 45.2% | 0% |
+| `pathtraver` | 268 | 36.1% | 0% |
+| `ldapi` | 59 | *not exercised* | — |
+| **In scope** | **1,572** | **52.0%** | **0.0%** |
+
+**Zero false positives**, on a suite built specifically to bait scanners with near-miss variants.
+That is the number the identity-keyed taint table and per-rule sanitizers exist to protect, and it
+is worth more than recall: one false positive on correct code costs more trust than ten true
+positives earn.
+
+`ldapi` reads 0/27 but was never measured — the Benchmark's embedded ApacheDS did not start, so
+every case threw `CommunicationException` at `getDirContext()` before reaching a sink. Excluding it,
+recall is 53.8%.
+
+**Recall is 52%, and the remaining misses are known rather than mysterious.** In rough order of
+how many cases they account for:
+
+- **Collection and array propagation.** A value stored in a `List`, `Map` or array and read back out
+  loses its taint. The table is keyed on object identity, so the container is tracked and its
+  contents are not.
+- **`String.format`, `split`, `replace`, `StringTokenizer`.** Reshaping propagators that exist for
+  `URLDecoder` but have not been generalised.
+- **Request body sources** — `getReader` and `getInputStream`, currently reported as a coverage gap
+  rather than tracked.
+- **Second-order flows** through session attributes and the database.
+
+Each is additive work against a taint engine that has already been shown correct, not a redesign.
+
 The other six families in the table above — configuration, cryptography, authn/authz, dependencies,
 sensitive data, API surface — are **not implemented** in the JVM agent.
 
