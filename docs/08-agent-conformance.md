@@ -145,7 +145,38 @@ handed off — which is structurally the same fix as `AgentRuntime.wrapForHandof
 the same reason. The difference is that on the JVM it was an enhancement after the synchronous path
 worked, and in Node it is load-bearing from the first line.
 
-Worth noting what this cost: one file and one command, run before the first hook was written.
+`taint-key-spike.mjs` confirms the fix: `AsyncResource.bind` at enqueue makes the pooled callback
+see its originating request.
+
+### The identity problem — and what it means for §1.2
+
+The same spike asked a second question, and the answer invalidates a direct port of the JVM design.
+
+§1.2 lists **identity-keyed taint** as one of three required properties, because two equal strings
+are not the same value and an equality-keyed engine reports every query containing a word a user
+happened to type. On the JVM that is an `IdentityHashMap`. In JavaScript it is not available at all:
+
+```
+ FAIL  WeakMap accepts a string primitive as a key    primitives cannot be weakly keyed
+ FAIL  a value-keyed table can tell them apart        the app's own constant reads as tainted
+ FAIL  two equal primitives are distinguishable       === is value equality for primitives
+```
+
+Boxed `String` objects do have identity, but no real application produces them.
+
+**So §1.2's three properties are a mechanism, not the requirement.** The requirement is the
+outcome — zero false positives — and identity keying was the JVM's means of reaching it. Any
+language whose strings are primitives needs a different means, and whether an equivalent exists is
+an **open question that must be answered before the Node agent is built**, not during.
+
+This is exactly the class of thing this document exists to surface. Ported unexamined, the JVM
+design would have produced a Node agent that reports the application's own string constants as
+attacker-controlled — the one failure the product cannot absorb.
+
+§1.2 is therefore amended: **the outcome is binding, the mechanism is per-language, and an agent
+that cannot demonstrate the outcome on its corpus does not ship.**
+
+Worth noting what this cost: two files and two commands, run before the first hook was written.
 
 ---
 
