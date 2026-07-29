@@ -7,14 +7,19 @@ nothing worth testing.
 
 from __future__ import annotations
 
+import json
 import secrets
 import string
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+import anyio.to_thread
+
 from .application.auth import RegisterOrganization
 from .application.context import RequestContext
+from .application.findings import ProcessingResult, ProcessRuntimeEvents
 from .container import Container
 from .domain.entities import LicenseTier
 from .domain.errors import NotFoundError
@@ -160,3 +165,57 @@ def describe_routes(app: object) -> list[tuple[str, str]]:
         if methods:
             described.append((",".join(methods), path))
     return sorted(described, key=lambda item: (item[1], item[0]))
+
+
+async def process_runtime_events(
+    container: Container, *, source: str, batch_size: int = 500
+) -> ProcessingResult:
+    """Fold a runtime event stream into findings.
+
+    The source is a file of NDJSON as written by the gateway's file sink — the same format
+    its Kafka sink produces, so an air-gapped capture replays through exactly this path.
+    Reading the whole file and processing in batches is deliberate for now: the file sink is
+    a bounded artefact, and a streaming consumer belongs with the Kafka source rather than
+    bolted onto this one.
+    """
+    path = Path(source.removeprefix("file:"))
+    # Off the event loop: a large capture would otherwise stall every other coroutine in the
+    # process while it is read.
+    lines = await anyio.to_thread.run_sync(_read_stream, path)
+
+    pipeline = ProcessRuntimeEvents(uow_factory=container.unit_of_work)
+    total = ProcessingResult()
+
+    batch: list[dict[str, Any]] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            batch.append(json.loads(line))
+        except json.JSONDecodeError:
+            total.rejected += 1
+            continue
+        if len(batch) >= batch_size:
+            _merge(total, await pipeline.execute(batch))
+            batch = []
+    if batch:
+        _merge(total, await pipeline.execute(batch))
+    return total
+
+
+def _read_stream(path: Path) -> list[str]:
+    if not path.is_file():
+        raise FileNotFoundError(f"no event stream at {path}")
+    return path.read_text(encoding="utf-8").splitlines()
+
+
+def _merge(into: ProcessingResult, batch: ProcessingResult) -> None:
+    into.findings_created += batch.findings_created
+    into.findings_updated += batch.findings_updated
+    into.regressions += batch.regressions
+    into.occurrences_stored += batch.occurrences_stored
+    into.rejected += batch.rejected
+    into.ignored += batch.ignored
+    for rejection in batch.rejections:
+        if len(into.rejections) < 50:
+            into.rejections.append(rejection)

@@ -106,6 +106,34 @@ def purge_sessions() -> None:
     typer.secho(f"{purged} expired session(s) purged.", fg=typer.colors.GREEN)
 
 
+@app.command("process-events")
+def process_events(
+    source: str = typer.Argument(..., help="NDJSON event stream, e.g. file:events.ndjson."),
+    batch_size: int = typer.Option(500, help="Events per transaction."),
+) -> None:
+    """Fold a runtime event stream into findings."""
+    result = _run(
+        lambda container: operations.process_runtime_events(
+            container, source=source, batch_size=batch_size
+        )
+    )
+    typer.secho(
+        f"{result.findings_created} finding(s) created, "
+        f"{result.findings_updated} updated, "
+        f"{result.regressions} regression(s), "
+        f"{result.occurrences_stored} evidence sample(s).",
+        fg=typer.colors.GREEN,
+    )
+    if result.ignored:
+        typer.echo(f"{result.ignored} event(s) were not taint hits.")
+    if result.rejected:
+        # Loud, but not fatal. A malformed event is a bug in an agent or a corrupt stream,
+        # and neither is a reason to leave the rest of the batch unprocessed.
+        typer.secho(f"{result.rejected} event(s) rejected:", fg=typer.colors.YELLOW)
+        for rejection in result.rejections[:10]:
+            typer.echo(f"  - {rejection}")
+
+
 @app.command()
 def routes() -> None:
     """Print every registered route - useful when auditing authorization coverage."""

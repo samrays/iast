@@ -36,8 +36,16 @@ distinguished from probing.
 apps/
   api/          FastAPI control plane — auth, RBAC, inventory, findings, policy    [Phase 2 ✅]
   gateway/      High-throughput agent ingest — auth, quota, fan-out to Kafka       [Phase 4 ✅]
-  worker/       Celery workers — correlation, scoring, AI pipelines, reporting     [Phase 5]
+  worker/       (not yet created — see the note below)                             [Phase 6]
   dashboard/    Next.js 15 console — inventory, fleet, RBAC, audit                 [Phase 3 ✅]
+
+The findings pipeline lives in `apps/api` as `aegis_api.application.findings`, driven by
+`aegis-api process-events`, rather than in `apps/worker`. It needs the same domain entities,
+repositories, unit of work and RLS binding as the control plane, and duplicating those across
+a process boundary would cost more than it buys while there is one consumer. Running it as a
+separate process is a deployment choice the CLI already allows. `apps/worker` gets created
+when there is a second consumer — the AI pipelines in Phase 6 — and Celery with it.
+
 agents/runtime/
   java-agent/   JVM agent — bytecode instrumentation (Byte Buddy)                  [Phase 4 🚧]
   dotnet-agent/ CLR profiler + Harmony patching                                    [Phase 6]

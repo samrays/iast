@@ -15,8 +15,11 @@ from ...domain.entities import (
     ApplicationEnvironment,
     AuditEvent,
     AuditOutcome,
+    Confidence,
     Criticality,
     EnvironmentKind,
+    Finding,
+    FindingStatus,
     Language,
     License,
     LicenseTier,
@@ -24,11 +27,13 @@ from ...domain.entities import (
     MembershipStatus,
     MfaCredential,
     MfaKind,
+    Occurrence,
     Organization,
     OrganizationStatus,
     ProtectionMode,
     Role,
     Session,
+    Severity,
     User,
     UserStatus,
 )
@@ -40,9 +45,11 @@ from .models import (
     ApplicationEnvironmentRecord,
     ApplicationRecord,
     AuditEventRecord,
+    FindingRecord,
     LicenseRecord,
     MembershipRecord,
     MfaCredentialRecord,
+    OccurrenceRecord,
     OrganizationRecord,
     RoleRecord,
     SessionRecord,
@@ -552,4 +559,147 @@ def audit_to_record(entity: AuditEvent) -> AuditEventRecord:
         previous_hash=entity.previous_hash,
         entry_hash=entity.entry_hash,
         occurred_at=entity.occurred_at,
+    )
+
+
+# --- Findings -----------------------------------------------------------------------
+
+
+def finding_to_domain(record: FindingRecord) -> Finding:
+    return Finding(
+        id=record.id,
+        organization_id=record.organization_id,
+        application_id=record.application_id,
+        identity_hash=record.identity_hash,
+        rule_key=record.rule_key,
+        title=record.title,
+        severity=Severity(record.severity),
+        confidence=Confidence(record.confidence),
+        sink_signature=record.sink_signature,
+        source_kind=record.source_kind,
+        stack_hash=record.stack_hash,
+        status=FindingStatus(record.status),
+        risk_score=float(record.risk_score),
+        risk_factors=tuple(
+            (str(f["name"]), float(f["delta"]), str(f["reason"])) for f in record.risk_factors
+        ),
+        occurrence_count=record.occurrence_count,
+        suppressed_occurrence_count=record.suppressed_occurrence_count,
+        environments_seen=tuple(record.environments_seen),
+        route_templates=tuple(record.route_templates),
+        first_seen_at=record.first_seen_at,
+        last_seen_at=record.last_seen_at,
+        remediated_at=record.remediated_at,
+        regressed=record.regressed,
+        accepted_until=record.accepted_until,
+        triage_note=record.triage_note,
+        triaged_by=record.triaged_by,
+        cwe_id=record.cwe_id,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def finding_to_record(entity: Finding) -> FindingRecord:
+    record = FindingRecord(
+        id=entity.id,
+        organization_id=entity.organization_id,
+        application_id=entity.application_id,
+        identity_hash=entity.identity_hash,
+        rule_key=entity.rule_key,
+        sink_signature=entity.sink_signature,
+        source_kind=entity.source_kind,
+        stack_hash=entity.stack_hash,
+        cwe_id=entity.cwe_id,
+    )
+    apply_finding_to_record(entity, record)
+    return record
+
+
+def apply_finding_to_record(entity: Finding, record: FindingRecord) -> None:
+    """Copy the mutable half of a finding onto its row.
+
+    Identity, rule and sink are deliberately absent: they are what the row *is*, and a
+    pipeline that could rewrite them would silently merge two different defects into one.
+    """
+    record.title = entity.title
+    record.severity = entity.severity.value
+    record.confidence = entity.confidence.value
+    record.status = entity.status.value
+    record.risk_score = entity.risk_score
+    record.risk_factors = [
+        {"name": name, "delta": round(delta, 3), "reason": reason}
+        for name, delta, reason in entity.risk_factors
+    ]
+    record.occurrence_count = entity.occurrence_count
+    record.suppressed_occurrence_count = entity.suppressed_occurrence_count
+    record.environments_seen = list(entity.environments_seen)
+    record.route_templates = list(entity.route_templates)
+    record.first_seen_at = entity.first_seen_at
+    record.last_seen_at = entity.last_seen_at
+    record.remediated_at = entity.remediated_at
+    record.regressed = entity.regressed
+    record.accepted_until = entity.accepted_until
+    record.triage_note = entity.triage_note
+    record.triaged_by = entity.triaged_by
+
+
+def occurrence_to_domain(record: OccurrenceRecord) -> Occurrence:
+    return Occurrence(
+        id=record.id,
+        organization_id=record.organization_id,
+        finding_id=record.finding_id,
+        environment=record.environment,
+        trace_id=record.trace_id,
+        request_method=record.request_method,
+        request_path=record.request_path,
+        route_template=record.route_template,
+        sink_argument=record.sink_argument,
+        tainted_ranges=tuple(
+            (int(r["start"]), int(r["length"]), str(r["source"]), str(r["source_name"]))
+            for r in record.tainted_ranges
+        ),
+        stack_frames=tuple(
+            (
+                str(f["declaring_class"]),
+                str(f["method_name"]),
+                int(f["line_number"]),
+                bool(f["application_code"]),
+            )
+            for f in record.stack_frames
+        ),
+        remote_address=str(record.remote_address or ""),
+        attack_detected=record.attack_detected,
+        observed_at=record.observed_at,
+        created_at=record.created_at,
+    )
+
+
+def occurrence_to_record(entity: Occurrence) -> OccurrenceRecord:
+    return OccurrenceRecord(
+        id=entity.id,
+        organization_id=entity.organization_id,
+        finding_id=entity.finding_id,
+        environment=entity.environment,
+        trace_id=entity.trace_id,
+        request_method=entity.request_method,
+        request_path=entity.request_path,
+        route_template=entity.route_template,
+        sink_argument=entity.sink_argument,
+        tainted_ranges=[
+            {"start": s, "length": length, "source": source, "source_name": name}
+            for s, length, source, name in entity.tainted_ranges
+        ],
+        stack_frames=[
+            {
+                "declaring_class": declaring_class,
+                "method_name": method,
+                "line_number": line,
+                "application_code": is_app,
+            }
+            for declaring_class, method, line, is_app in entity.stack_frames
+        ],
+        remote_address=entity.remote_address or None,
+        attack_detected=entity.attack_detected,
+        observed_at=entity.observed_at,
     )

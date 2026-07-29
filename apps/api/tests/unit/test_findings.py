@@ -376,3 +376,93 @@ class TestLifecycle:
     def test_a_finding_must_have_an_identity(self) -> None:
         with pytest.raises(InvalidStateError, match="identity"):
             make_finding(identity_hash="")
+
+
+class TestWireParsing:
+    """Reading the agent's wire format defensively.
+
+    Every value here crosses a process boundary from code running inside a customer's
+    application, so the parser's job is to be unsurprising rather than strict: an unreadable
+    field costs evidence, never a crash.
+    """
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("SEVERITY_CRITICAL", Severity.CRITICAL),
+            ("critical", Severity.CRITICAL),
+            ("", Severity.MEDIUM),
+            (None, Severity.MEDIUM),
+            ("SEVERITY_NONSENSE", Severity.MEDIUM),
+        ],
+    )
+    def test_severity_falls_back_rather_than_raising(self, raw: object, expected: Severity) -> None:
+        from aegis_api.application.findings import _severity
+
+        assert _severity(raw) is expected
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("CONFIDENCE_EXPLOITED", Confidence.EXPLOITED),
+            ("", Confidence.SUSPECTED),
+            ("garbage", Confidence.SUSPECTED),
+        ],
+    )
+    def test_unknown_confidence_is_the_least_alarming_value(
+        self, raw: object, expected: Confidence
+    ) -> None:
+        # Defaulting upward would inflate risk scores off the back of a malformed field.
+        from aegis_api.application.findings import _confidence
+
+        assert _confidence(raw) is expected
+
+    def test_source_kind_comes_from_the_first_range(self) -> None:
+        from aegis_api.application.findings import _primary_source_kind
+
+        assert (
+            _primary_source_kind(
+                [
+                    {"source": "SOURCE_KIND_PARAMETER"},
+                    {"source": "SOURCE_KIND_HEADER"},
+                ]
+            )
+            == "PARAMETER"
+        )
+        assert _primary_source_kind([]) == "UNKNOWN"
+        assert _primary_source_kind("not a list") == "UNKNOWN"
+
+    def test_a_title_names_the_application_method(self) -> None:
+        from aegis_api.application.findings import _title
+
+        assert (
+            _title(
+                "sql-injection",
+                [
+                    ("java.sql.Statement", "execute", False),
+                    ("com.acme.data.UserRepository", "findByName", True),
+                ],
+            )
+            == "SQL injection in UserRepository.findByName"
+        )
+
+    def test_a_title_degrades_to_the_rule_when_no_application_frame_exists(self) -> None:
+        from aegis_api.application.findings import _title
+
+        # Third-party code reaching a sink is still a finding; it just cannot be named.
+        assert _title("sql-injection", [("java.sql.Statement", "execute", False)]) == (
+            "SQL injection"
+        )
+
+    def test_a_missing_timestamp_falls_back_to_now(self) -> None:
+        from aegis_api.application.findings import _observed_at
+
+        assert _observed_at({"occurred_at_ms": "nonsense"}).year >= 2026
+        assert _observed_at({}).year >= 2026
+
+    def test_malformed_ranges_and_frames_yield_nothing_rather_than_raising(self) -> None:
+        from aegis_api.application.findings import _frames, _ranges, _stack_frames
+
+        assert _ranges("not a list") == []
+        assert _frames({"not": "a list"}) == []
+        assert _stack_frames(None) == []

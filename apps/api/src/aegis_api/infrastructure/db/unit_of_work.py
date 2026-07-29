@@ -24,6 +24,7 @@ from .repositories import (
     SqlApplicationRepository,
     SqlAuditRepository,
     SqlEnvironmentRepository,
+    SqlFindingRepository,
     SqlLicenseRepository,
     SqlMembershipRepository,
     SqlMfaCredentialRepository,
@@ -155,6 +156,7 @@ class SqlUnitOfWork:
         self._environments = SqlEnvironmentRepository(self.session, organization_id)
         self._agents = SqlAgentRepository(self.session, organization_id)
         self._audit = SqlAuditRepository(self.session, organization_id)
+        self._findings = SqlFindingRepository(self.session, organization_id)
 
     @property
     def bound_organization_id(self) -> UUID | None:
@@ -198,6 +200,11 @@ class SqlUnitOfWork:
     def audit(self) -> SqlAuditRepository:
         self._require_tenant()
         return self._audit
+
+    @property
+    def findings(self) -> SqlFindingRepository:
+        self._require_tenant()
+        return self._findings
 
     # --- cross-tenant, by necessity -------------------------------------------
 

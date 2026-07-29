@@ -19,16 +19,21 @@ from uuid import UUID
 from sqlalchemy import Select, delete, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...application.findings import AgentContext
 from ...domain.entities import (
     Agent,
     ApiKey,
     Application,
     ApplicationEnvironment,
     AuditEvent,
+    Criticality,
+    EnvironmentKind,
+    Finding,
     License,
     Membership,
     MfaCredential,
     MfaKind,
+    Occurrence,
     Organization,
     Role,
     Session,
@@ -43,9 +48,11 @@ from .models import (
     ApplicationEnvironmentRecord,
     ApplicationRecord,
     AuditEventRecord,
+    FindingRecord,
     LicenseRecord,
     MembershipRecord,
     MfaCredentialRecord,
+    OccurrenceRecord,
     OrganizationRecord,
     RoleRecord,
     SessionRecord,
@@ -796,3 +803,119 @@ def _paginate(records: list[Any], limit: int, to_domain: Any) -> tuple[list[Any]
     page = records[:limit]
     next_cursor = encode_cursor(page[-1].created_at, page[-1].id) if has_more and page else None
     return [to_domain(r) for r in page], next_cursor
+
+
+class SqlFindingRepository(_TenantRepository):
+    """Findings, their evidence and the agent lookup the worker needs.
+
+    Every query is scoped by ``organization_id`` in the WHERE clause as well as being covered
+    by row-level security. Belt and braces on purpose: RLS is the backstop that survives a
+    forgotten predicate, and the predicate is what keeps the query on the tenant index.
+    """
+
+    def _scoped(self) -> Select[tuple[FindingRecord]]:
+        return select(FindingRecord).where(FindingRecord.organization_id == self._organization_id)
+
+    async def resolve_agent_context(self, agent_id: str) -> AgentContext | None:
+        """Which application, environment and criticality an agent reports for.
+
+        Resolved from the control plane's own inventory rather than from anything the agent
+        said. Returning ``None`` for an unregistered agent is what stops a leaked token
+        inventing an application to file findings against.
+        """
+        try:
+            identifier = UUID(agent_id)
+        except (ValueError, AttributeError):
+            return None
+
+        stmt = (
+            select(
+                ApplicationEnvironmentRecord.application_id,
+                ApplicationEnvironmentRecord.kind,
+                ApplicationEnvironmentRecord.internet_facing,
+                ApplicationRecord.criticality,
+            )
+            # Explicit: without it SQLAlchemy infers the FROM from the selected columns and
+            # leaves 'agents' dangling in a comma join.
+            .select_from(AgentRecord)
+            .join(
+                ApplicationEnvironmentRecord,
+                AgentRecord.application_environment_id == ApplicationEnvironmentRecord.id,
+            )
+            .join(
+                ApplicationRecord,
+                ApplicationEnvironmentRecord.application_id == ApplicationRecord.id,
+            )
+            .where(
+                AgentRecord.id == identifier,
+                AgentRecord.organization_id == self._organization_id,
+            )
+        )
+        row = (await self._session.execute(stmt)).first()
+        if row is None:
+            return None
+        return AgentContext(
+            application_id=row[0],
+            environment_kind=EnvironmentKind(row[1]),
+            internet_facing=bool(row[2]),
+            criticality=Criticality(row[3]),
+        )
+
+    async def get_by_identity(self, identity_hash: str) -> Finding | None:
+        record = (
+            await self._session.execute(
+                self._scoped().where(FindingRecord.identity_hash == identity_hash)
+            )
+        ).scalar_one_or_none()
+        return m.finding_to_domain(record) if record else None
+
+    async def get(self, finding_id: UUID) -> Finding | None:
+        record = (
+            await self._session.execute(self._scoped().where(FindingRecord.id == finding_id))
+        ).scalar_one_or_none()
+        return m.finding_to_domain(record) if record else None
+
+    async def upsert(self, finding: Finding) -> Finding:
+        """Insert a new finding, or update the one already carrying this identity.
+
+        The identity is derived rather than assigned, so this converges: replaying an event
+        stream produces increments on existing rows instead of duplicates.
+        """
+        existing = (
+            await self._session.execute(
+                self._scoped().where(FindingRecord.identity_hash == finding.identity_hash)
+            )
+        ).scalar_one_or_none()
+
+        if existing is None:
+            record = m.finding_to_record(finding)
+            self._session.add(record)
+            await self._session.flush()
+            return m.finding_to_domain(record)
+
+        m.apply_finding_to_record(finding, existing)
+        await self._session.flush()
+        return m.finding_to_domain(existing)
+
+    async def add_occurrence(self, occurrence: Occurrence) -> None:
+        self._session.add(m.occurrence_to_record(occurrence))
+        await self._session.flush()
+
+    async def latest_occurrence_at(self, finding_id: UUID) -> datetime | None:
+        stmt = select(func.max(OccurrenceRecord.observed_at)).where(
+            OccurrenceRecord.finding_id == finding_id,
+            OccurrenceRecord.organization_id == self._organization_id,
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def list_occurrences(self, finding_id: UUID, *, limit: int = 20) -> list[Occurrence]:
+        stmt = (
+            select(OccurrenceRecord)
+            .where(
+                OccurrenceRecord.finding_id == finding_id,
+                OccurrenceRecord.organization_id == self._organization_id,
+            )
+            .order_by(OccurrenceRecord.observed_at.desc())
+            .limit(limit)
+        )
+        return [m.occurrence_to_domain(r) for r in (await self._session.execute(stmt)).scalars()]
