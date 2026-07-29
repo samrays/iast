@@ -127,6 +127,10 @@ public final class BenchmarkApp {
         register("/deser/read", Expectation.VULNERABLE, "unsafe-deserialization", "payload");
         register("/deser/constant", Expectation.SAFE, "", "payload");
 
+        // --- Cookie as a source -----------------------------------------------------------
+        register("/cookie/sql", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
+        register("/cookie/constant", Expectation.SAFE, "", SQL_PAYLOAD);
+
         // --- Reads a source and reaches nothing -------------------------------------------
         register("/noop", Expectation.SAFE, "", SQL_PAYLOAD);
     }
@@ -154,7 +158,12 @@ public final class BenchmarkApp {
 
             int port = ((ServerConnector) server.getConnectors()[0]).getLocalPort();
             for (Map.Entry<String, String[]> entry : CASES.entrySet()) {
-                String body = get(port, entry.getKey() + "?name=" + entry.getValue()[2]);
+                String path = entry.getKey();
+                String payload = entry.getValue()[2];
+                String body =
+                        path.startsWith("/cookie/")
+                                ? get(port, path, "name=" + payload)
+                                : get(port, path + "?name=" + payload, null);
                 System.out.println(
                         "CASE " + entry.getKey() + " " + entry.getValue()[0] + " -> " + body);
             }
@@ -172,19 +181,19 @@ public final class BenchmarkApp {
         Thread.sleep(1_500);
     }
 
-    private static String get(int port, String path) throws Exception {
+    private static String get(int port, String path, String cookie) throws Exception {
+        HttpRequest.Builder builder =
+                HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).GET();
+        if (cookie != null) {
+            builder.header("Cookie", cookie);
+        }
         HttpResponse<String> response =
                 HttpClient.newBuilder()
                         // Never follow the open redirect. The point is that it was issued, not
                         // that some other host answered it.
                         .followRedirects(HttpClient.Redirect.NEVER)
                         .build()
-                        .send(
-                                HttpRequest.newBuilder(
-                                                URI.create("http://127.0.0.1:" + port + path))
-                                        .GET()
-                                        .build(),
-                                HttpResponse.BodyHandlers.ofString());
+                        .send(builder.build(), HttpResponse.BodyHandlers.ofString());
         return response.statusCode() + ":" + response.body().trim();
     }
 
@@ -215,13 +224,14 @@ public final class BenchmarkApp {
             String name = request.getParameter("name");
             PrintWriter out = response.getWriter();
             try {
-                out.print(run(name, response));
+                out.print(run(name, request, response));
             } catch (Exception e) {
                 out.print("handled:" + e.getClass().getSimpleName());
             }
         }
 
-        private String run(String name, HttpServletResponse response) throws Exception {
+        private String run(String name, HttpServletRequest request, HttpServletResponse response)
+                throws Exception {
             return switch (path) {
                 case "/sql/builder" -> sqlBuilder(name);
                 case "/sql/plus" -> sqlPlus(name);
@@ -250,6 +260,8 @@ public final class BenchmarkApp {
                 case "/log/constant" -> logConstant(name);
                 case "/deser/read" -> deserializeFromInput(name);
                 case "/deser/constant" -> deserializeConstant(name);
+                case "/cookie/sql" -> cookieInjection(request);
+                case "/cookie/constant" -> cookieConstant(request);
                 case "/noop" -> "seen:" + name.length();
                 default -> throw new IllegalStateException("unmapped case " + path);
             };
@@ -317,6 +329,39 @@ public final class BenchmarkApp {
             return query("SELECT name FROM users WHERE name = '" + constant + "'")
                     + ":"
                     + name.length();
+        }
+
+        // --- cookie ---------------------------------------------------------------------
+
+        /**
+         * A cookie concatenated into SQL.
+         *
+         * <p>Cookies are the source developers forget is attacker-controlled, because the
+         * server set them. Nothing stops the client sending back whatever it likes.
+         */
+        private String cookieInjection(HttpServletRequest request) throws Exception {
+            String value = cookie(request, "name");
+            StringBuilder sql = new StringBuilder("SELECT name FROM users WHERE name = '");
+            sql.append(value).append("'");
+            return query(sql.toString());
+        }
+
+        private String cookieConstant(HttpServletRequest request) throws Exception {
+            return query("SELECT name FROM users WHERE name = 'alice'")
+                    + ":"
+                    + cookie(request, "name").length();
+        }
+
+        private static String cookie(HttpServletRequest request, String wanted) {
+            jakarta.servlet.http.Cookie[] cookies = request.getCookies();
+            if (cookies != null) {
+                for (jakarta.servlet.http.Cookie candidate : cookies) {
+                    if (wanted.equals(candidate.getName())) {
+                        return candidate.getValue();
+                    }
+                }
+            }
+            return "";
         }
 
         private String query(String sql) throws Exception {
