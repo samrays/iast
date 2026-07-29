@@ -34,6 +34,15 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO aegis_app;
 -- before an entry can be altered (threat T-11).
 REVOKE UPDATE, DELETE ON audit_events FROM aegis_app;
 
+-- Triage comments are the written record of how a dismissal was decided. After an incident
+-- that record is exactly what an investigation reads, and exactly what someone would most
+-- want to change. The trigger in migration 0002 refuses the mutation regardless of role;
+-- this revoke means the application cannot even attempt it.
+REVOKE UPDATE, DELETE ON finding_comments FROM aegis_app;
+
+-- Evidence of something that happened cannot retrospectively have happened differently.
+REVOKE UPDATE, DELETE ON finding_occurrences FROM aegis_app;
+
 -- Tables created by future migrations inherit the same grants.
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
     GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO aegis_app;

@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from aegis_api.config import Environment, Settings, get_settings
 from aegis_api.container import Container, build_container
 from aegis_api.infrastructure.db.base import Base
-from aegis_api.infrastructure.db.models import TENANT_TABLES
+from aegis_api.infrastructure.db.models import APPEND_ONLY_TABLES, TENANT_TABLES
 from aegis_api.main import create_app
 
 TEST_PASSWORD = "correct-horse-battery-77"
@@ -117,7 +117,7 @@ async def _ensure_app_role(connection: Any) -> None:
 async def _grant_app_role(connection: Any) -> None:
     """Grant the application role exactly what it needs — and nothing on the audit table.
 
-    ``audit_events`` gets INSERT and SELECT only, so the append-only guarantee holds at the
+    The append-only tables get INSERT and SELECT only, so that guarantee holds at the
     privilege level as well as through the trigger (threat T-11).
     """
     database = str(connection.engine.url.database)
@@ -129,7 +129,8 @@ async def _grant_app_role(connection: Any) -> None:
     await connection.execute(
         text(f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {APP_ROLE}")
     )
-    await connection.execute(text(f"REVOKE UPDATE, DELETE ON audit_events FROM {APP_ROLE}"))
+    for table in APPEND_ONLY_TABLES:
+        await connection.execute(text(f"REVOKE UPDATE, DELETE ON {table} FROM {APP_ROLE}"))
 
 
 async def _apply_security_objects(connection: Any) -> None:
@@ -153,22 +154,21 @@ async def _apply_security_objects(connection: Any) -> None:
                 f"USING ({predicate}) WITH CHECK ({predicate})"
             )
         )
-    await connection.execute(text("""
-            CREATE OR REPLACE FUNCTION audit_events_reject_mutation()
+    for table in APPEND_ONLY_TABLES:
+        await connection.execute(text(f"""
+            CREATE OR REPLACE FUNCTION {table}_reject_mutation()
             RETURNS TRIGGER AS $$
             BEGIN
-                RAISE EXCEPTION 'audit_events is append-only (%)', TG_OP
+                RAISE EXCEPTION '{table} is append-only (%)', TG_OP
                     USING ERRCODE = 'insufficient_privilege';
             END;
             $$ LANGUAGE plpgsql;
             """))
-    await connection.execute(
-        text("DROP TRIGGER IF EXISTS audit_events_append_only ON audit_events")
-    )
-    await connection.execute(text("""
-            CREATE TRIGGER audit_events_append_only
-            BEFORE UPDATE OR DELETE ON audit_events
-            FOR EACH ROW EXECUTE FUNCTION audit_events_reject_mutation();
+        await connection.execute(text(f"DROP TRIGGER IF EXISTS {table}_append_only ON {table}"))
+        await connection.execute(text(f"""
+            CREATE TRIGGER {table}_append_only
+            BEFORE UPDATE OR DELETE ON {table}
+            FOR EACH ROW EXECUTE FUNCTION {table}_reject_mutation();
             """))
 
 

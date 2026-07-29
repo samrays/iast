@@ -28,6 +28,7 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, CITEXT, INET, JSONB
@@ -54,6 +55,9 @@ _PROTECTION_MODES = ("OFF", "MONITOR", "BLOCK")
 _AGENT_STATUSES = ("REGISTERED", "ONLINE", "DEGRADED", "OFFLINE", "DISABLED")
 _AUDIT_OUTCOMES = ("SUCCESS", "FAILURE", "DENIED")
 _ACTOR_TYPES = ("USER", "API_KEY", "AGENT", "SYSTEM")
+_FINDING_STATUSES = ("OPEN", "CONFIRMED", "REMEDIATED", "FALSE_POSITIVE", "ACCEPTED_RISK")
+_SEVERITIES = ("INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL")
+_CONFIDENCES = ("SUSPECTED", "CONFIRMED", "EXPLOITED")
 
 
 def _enum_check(column: str, values: tuple[str, ...], name: str) -> CheckConstraint:
@@ -399,6 +403,183 @@ class AgentRecord(Base, TimestampMixin):
     )
 
 
+# --- Findings -----------------------------------------------------------------------
+
+
+class FindingRecord(Base, TimestampMixin):
+    """One defect in one application.
+
+    ``identity_hash`` is computed by the worker (ADR-0009) and is the real key. The unique
+    constraint on ``(organization_id, identity_hash)`` is what makes ingest idempotent: a
+    replayed event stream converges on the same rows instead of multiplying them.
+    """
+
+    __tablename__ = "findings"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    application_id: Mapped[UUID] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), nullable=False
+    )
+    identity_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    rule_key: Mapped[str] = mapped_column(String(60), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    severity: Mapped[str] = mapped_column(String(10), nullable=False)
+    confidence: Mapped[str] = mapped_column(String(10), nullable=False)
+    sink_signature: Mapped[str] = mapped_column(String(400), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    stack_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="OPEN", server_default="OPEN"
+    )
+    risk_score: Mapped[float] = mapped_column(
+        Numeric(4, 2), nullable=False, default=0, server_default=text("0")
+    )
+    risk_factors: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    occurrence_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    suppressed_occurrence_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    environments_seen: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
+    )
+    route_templates: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
+    )
+    first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    remediated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    regressed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    accepted_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    triage_note: Mapped[str] = mapped_column(
+        String(2000), nullable=False, default="", server_default=""
+    )
+    triaged_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    cwe_id: Mapped[int | None] = mapped_column(Integer)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "identity_hash", name="uq_findings_organization_id_identity_hash"
+        ),
+        _enum_check("status", _FINDING_STATUSES, "findings_status"),
+        _enum_check("severity", _SEVERITIES, "findings_severity"),
+        _enum_check("confidence", _CONFIDENCES, "findings_confidence"),
+        # The queue: a tenant's findings by status, worst first. Every list view sorts this
+        # way, so the index carries the order rather than the database re-sorting per request.
+        Index(
+            "ix_findings_organization_id_status_risk_score",
+            "organization_id",
+            "status",
+            text("risk_score DESC"),
+        ),
+        Index("ix_findings_organization_id_application_id", "organization_id", "application_id"),
+        Index("ix_findings_organization_id_last_seen_at", "organization_id", "last_seen_at"),
+        # Partial: the sweeper returning expired acceptances to the queue scans only these.
+        Index(
+            "ix_findings_accepted_until",
+            "accepted_until",
+            postgresql_where=text("status = 'ACCEPTED_RISK'"),
+        ),
+    )
+
+
+class OccurrenceRecord(Base):
+    """One sighting of a finding, with its evidence.
+
+    Written sparsely and never updated. The worker rate-limits samples, so this holds a
+    handful of representative traces per finding rather than a transcript of production
+    traffic — a finding hit a million times does not need a million near-identical copies.
+    """
+
+    __tablename__ = "finding_occurrences"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    finding_id: Mapped[UUID] = mapped_column(
+        ForeignKey("findings.id", ondelete="CASCADE"), nullable=False
+    )
+    environment: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="", server_default=""
+    )
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    request_method: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="", server_default=""
+    )
+    request_path: Mapped[str] = mapped_column(
+        String(500), nullable=False, default="", server_default=""
+    )
+    route_template: Mapped[str] = mapped_column(
+        String(500), nullable=False, default="", server_default=""
+    )
+    sink_argument: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    tainted_ranges: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    stack_frames: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    remote_address: Mapped[str | None] = mapped_column(INET)
+    attack_detected: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_finding_occurrences_finding_id_observed_at",
+            "finding_id",
+            text("observed_at DESC"),
+        ),
+        Index("ix_finding_occurrences_organization_id", "organization_id"),
+    )
+
+
+class FindingCommentRecord(Base):
+    """Triage discussion. Append-only, like the audit log it sits beside.
+
+    Comments are the evidence of how a decision was reached. Allowing them to be edited or
+    deleted would let the record of a dismissal be rewritten after an incident.
+    """
+
+    __tablename__ = "finding_comments"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    finding_id: Mapped[UUID] = mapped_column(
+        ForeignKey("findings.id", ondelete="CASCADE"), nullable=False
+    )
+    author_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    author_label: Mapped[str] = mapped_column(
+        String(200), nullable=False, default="", server_default=""
+    )
+    body: Mapped[str] = mapped_column(String(4000), nullable=False)
+    status_from: Mapped[str | None] = mapped_column(String(20))
+    status_to: Mapped[str | None] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_finding_comments_finding_id_created_at", "finding_id", "created_at"),
+        Index("ix_finding_comments_organization_id", "organization_id"),
+    )
+
+
 # --- Audit --------------------------------------------------------------------------
 
 
@@ -473,4 +654,18 @@ TENANT_TABLES: tuple[str, ...] = (
     "application_environments",
     "agents",
     "audit_events",
+    "findings",
+    "finding_occurrences",
+    "finding_comments",
+)
+
+#: Tables the application may INSERT into and read, but never rewrite.
+#:
+#: Evidence of something that happened cannot retrospectively have happened differently, and
+#: the written reason for dismissing a live vulnerability is exactly what an investigation
+#: reads after an incident — and exactly what someone would then most want to change.
+APPEND_ONLY_TABLES: tuple[str, ...] = (
+    "audit_events",
+    "finding_occurrences",
+    "finding_comments",
 )
