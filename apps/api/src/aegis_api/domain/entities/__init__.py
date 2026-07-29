@@ -2,6 +2,17 @@
 
 from .access import ApiKey, Membership, MembershipStatus, Role, Session
 from .audit import ActorType, AuditEvent, AuditOutcome
+from .findings import (
+    Confidence,
+    Finding,
+    FindingStatus,
+    Occurrence,
+    RiskScore,
+    Severity,
+    finding_identity,
+    score_finding,
+    stack_fingerprint,
+)
 from .inventory import (
     Agent,
     AgentStatus,
@@ -24,8 +35,11 @@ __all__ = [
     "ApplicationEnvironment",
     "AuditEvent",
     "AuditOutcome",
+    "Confidence",
     "Criticality",
     "EnvironmentKind",
+    "Finding",
+    "FindingStatus",
     "Language",
     "License",
     "LicenseTier",
@@ -33,11 +47,17 @@ __all__ = [
     "MembershipStatus",
     "MfaCredential",
     "MfaKind",
+    "Occurrence",
     "Organization",
     "OrganizationStatus",
     "ProtectionMode",
+    "RiskScore",
     "Role",
     "Session",
+    "Severity",
     "User",
     "UserStatus",
+    "finding_identity",
+    "score_finding",
+    "stack_fingerprint",
 ]
