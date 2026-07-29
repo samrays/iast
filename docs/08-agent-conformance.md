@@ -174,7 +174,8 @@ design would have produced a Node agent that reports the application's own strin
 attacker-controlled — the one failure the product cannot absorb.
 
 §1.2 is therefore amended: **the outcome is binding, the mechanism is per-language, and an agent
-that cannot demonstrate the outcome on its corpus does not ship.**
+that cannot demonstrate the outcome on its corpus does not ship.** The Node mechanism, the options
+rejected, and what the change costs are decided in [ADR-0011](adr/0011-javascript-taint-representation.md).
 
 Worth noting what this cost: two files and two commands, run before the first hook was written.
 
