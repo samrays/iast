@@ -22,11 +22,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
+from ..domain.entities.audit import AuditAction
 from ..domain.entities.findings import (
     Confidence,
     Finding,
+    FindingStatus,
     Occurrence,
     Severity,
     finding_identity,
@@ -34,6 +36,12 @@ from ..domain.entities.findings import (
     stack_fingerprint,
 )
 from ..domain.entities.inventory import Criticality, EnvironmentKind
+from ..domain.errors import NotFoundError, ValidationError
+from ..domain.permissions import Permission
+from ..domain.ports import UnitOfWork
+from .audit_recorder import AuditRecorder
+from .context import Principal
+from .dto import Page
 
 #: Rule keys the agent emits, mapped to the CWE a report needs to cite.
 CWE_BY_RULE: dict[str, int] = {
@@ -402,3 +410,186 @@ def _title(rule_key: str, frames: list[tuple[str, str, bool]]) -> str:
             simple = declaring_class.rsplit(".", 1)[-1]
             return f"{label} in {simple}.{method}"[:200]
     return label
+
+
+# --- Read and triage use cases ---------------------------------------------------------
+
+
+class ListFindings:
+    """The queue a developer opens in the morning.
+
+    Ordered by risk score descending by default, which is the whole reason the score exists:
+    a list that is not sorted by what will hurt most gets worked top-to-bottom by accident of
+    insertion order.
+    """
+
+    def __init__(self, uow: UnitOfWork) -> None:
+        self._uow = uow
+
+    async def execute(
+        self,
+        *,
+        principal: Principal,
+        limit: int,
+        cursor: str | None,
+        status: list[str] | None = None,
+        severity: list[str] | None = None,
+        rule_key: str | None = None,
+        application_id: UUID | None = None,
+        environment: str | None = None,
+        search: str | None = None,
+    ) -> Page[Finding]:
+        principal.require(Permission.FINDING_READ)
+        async with self._uow as uow:
+            await uow.bind_tenant(principal.organization_id)
+            items, next_cursor = await uow.findings.list_all(
+                limit=limit,
+                cursor=cursor,
+                statuses=[s.upper() for s in status] if status else None,
+                severities=[s.upper() for s in severity] if severity else None,
+                rule_key=rule_key,
+                application_id=application_id,
+                environment=environment.upper() if environment else None,
+                search=search,
+            )
+            return Page(items=items, next_cursor=next_cursor, limit=limit)
+
+
+class GetFinding:
+    """One finding with the evidence a developer needs to reproduce it."""
+
+    def __init__(self, uow: UnitOfWork) -> None:
+        self._uow = uow
+
+    async def execute(
+        self, *, principal: Principal, finding_id: UUID
+    ) -> tuple[Finding, list[Occurrence], list[dict[str, Any]]]:
+        principal.require(Permission.FINDING_READ)
+        async with self._uow as uow:
+            await uow.bind_tenant(principal.organization_id)
+            finding = await uow.findings.get(finding_id)
+            if finding is None:
+                raise NotFoundError("Finding not found.")
+            occurrences = await uow.findings.list_occurrences(finding_id)
+            comments = await uow.findings.list_comments(finding_id)
+            return finding, occurrences, comments
+
+
+class TriageFinding:
+    """Move a finding through its lifecycle, and write down who decided and why."""
+
+    def __init__(self, uow: UnitOfWork) -> None:
+        self._uow = uow
+
+    async def execute(
+        self,
+        *,
+        principal: Principal,
+        finding_id: UUID,
+        status: FindingStatus,
+        note: str = "",
+        accepted_for_days: int | None = None,
+    ) -> Finding:
+        # Suppressing is a stronger act than triaging: it takes a live vulnerability out of
+        # everyone's queue, so it carries its own permission rather than riding on triage.
+        principal.require(
+            Permission.FINDING_SUPPRESS if status.is_suppressed else Permission.FINDING_TRIAGE
+        )
+        async with self._uow as uow:
+            await uow.bind_tenant(principal.organization_id)
+            finding = await uow.findings.get(finding_id)
+            if finding is None:
+                raise NotFoundError("Finding not found.")
+
+            previous = finding.status
+            finding.transition(
+                status,
+                actor_id=principal.user_id or uuid4(),
+                now=datetime.now(UTC),
+                note=note,
+                accepted_for=timedelta(days=accepted_for_days) if accepted_for_days else None,
+            )
+            await uow.findings.upsert(finding)
+            # Recorded twice on purpose. The audit log answers "who changed what" for a
+            # compliance reviewer; the comment thread answers "why" for the next developer who
+            # opens this finding and wonders who decided it was acceptable.
+            await uow.findings.add_comment(
+                finding_id=finding.id,
+                organization_id=principal.organization_id,
+                author_id=principal.user_id,
+                author_label=principal.label,
+                body=note or f"Status changed to {status.value}.",
+                status_from=previous.value,
+                status_to=status.value,
+            )
+            await AuditRecorder(uow.audit).record(
+                principal=principal,
+                action=AuditAction.FINDING_TRIAGED.value,
+                resource_type="finding",
+                resource_id=finding.id,
+                metadata={
+                    "from": previous.value,
+                    "to": status.value,
+                    "rule_key": finding.rule_key,
+                },
+            )
+            await uow.commit()
+            return finding
+
+
+class CommentOnFinding:
+    """Add to the triage thread without changing the finding's state."""
+
+    def __init__(self, uow: UnitOfWork) -> None:
+        self._uow = uow
+
+    async def execute(self, *, principal: Principal, finding_id: UUID, body: str) -> dict[str, Any]:
+        principal.require(Permission.FINDING_TRIAGE)
+        text = body.strip()
+        if not text:
+            raise ValidationError("A comment cannot be empty.")
+        async with self._uow as uow:
+            await uow.bind_tenant(principal.organization_id)
+            if await uow.findings.get(finding_id) is None:
+                raise NotFoundError("Finding not found.")
+            comment = await uow.findings.add_comment(
+                finding_id=finding_id,
+                organization_id=principal.organization_id,
+                author_id=principal.user_id,
+                author_label=principal.label,
+                body=text[:4000],
+            )
+            await uow.commit()
+            return comment
+
+
+class ExpireAcceptedRisks:
+    """Return findings whose accepted-risk window has closed to the open queue.
+
+    Run on a schedule. A risk accepted once, forever, silently is how a finding leaves a
+    queue and comes back as an incident.
+    """
+
+    def __init__(self, uow: UnitOfWork) -> None:
+        self._uow = uow
+
+    async def execute(self, *, organization_id: UUID) -> int:
+        now = datetime.now(UTC)
+        async with self._uow as uow:
+            await uow.bind_tenant(organization_id)
+            expired = 0
+            for finding in await uow.findings.list_expired_acceptances(now):
+                if finding.expire_acceptance(now):
+                    await uow.findings.upsert(finding)
+                    await uow.findings.add_comment(
+                        finding_id=finding.id,
+                        organization_id=organization_id,
+                        author_id=None,
+                        author_label="system",
+                        body="Accepted-risk window expired; returned to the open queue.",
+                        status_from=FindingStatus.ACCEPTED_RISK.value,
+                        status_to=FindingStatus.OPEN.value,
+                    )
+                    expired += 1
+            await uow.commit()
+            return expired

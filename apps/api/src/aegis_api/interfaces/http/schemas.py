@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import fields as dataclass_fields
 from datetime import datetime
-from typing import Annotated, Any, Generic, TypeVar
+from typing import Annotated, Any, Generic, Literal, TypeVar
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -502,3 +502,158 @@ class HealthResponse(Schema):
 class ReadinessResponse(Schema):
     status: str
     checks: dict[str, str]
+
+
+# --- Findings -----------------------------------------------------------------------
+
+
+class RiskFactorResponse(Schema):
+    name: str
+    delta: float
+    reason: str
+
+
+class FindingResponse(Schema):
+    id: UUID
+    application_id: UUID
+    rule_key: str
+    title: str
+    severity: str
+    confidence: str
+    status: str
+    risk_score: float
+    risk_factors: list[RiskFactorResponse]
+    occurrence_count: int
+    suppressed_occurrence_count: int
+    environments_seen: list[str]
+    route_templates: list[str]
+    sink_signature: str
+    source_kind: str
+    cwe_id: int | None
+    regressed: bool
+    first_seen_at: datetime | None
+    last_seen_at: datetime | None
+    accepted_until: datetime | None
+    triage_note: str
+
+    @classmethod
+    def of(cls, finding: Any) -> FindingResponse:
+        return cls(
+            id=finding.id,
+            application_id=finding.application_id,
+            rule_key=finding.rule_key,
+            title=finding.title,
+            severity=finding.severity.value,
+            confidence=finding.confidence.value,
+            status=finding.status.value,
+            risk_score=finding.risk_score,
+            risk_factors=[
+                RiskFactorResponse(name=name, delta=delta, reason=reason)
+                for name, delta, reason in finding.risk_factors
+            ],
+            occurrence_count=finding.occurrence_count,
+            suppressed_occurrence_count=finding.suppressed_occurrence_count,
+            environments_seen=list(finding.environments_seen),
+            route_templates=list(finding.route_templates),
+            sink_signature=finding.sink_signature,
+            source_kind=finding.source_kind,
+            cwe_id=finding.cwe_id,
+            regressed=finding.regressed,
+            first_seen_at=finding.first_seen_at,
+            last_seen_at=finding.last_seen_at,
+            accepted_until=finding.accepted_until,
+            triage_note=finding.triage_note,
+        )
+
+
+class TaintRangeResponse(Schema):
+    start: int
+    length: int
+    source: str
+    source_name: str
+
+
+class StackFrameResponse(Schema):
+    declaring_class: str
+    method_name: str
+    line_number: int
+    application_code: bool
+
+
+class OccurrenceResponse(Schema):
+    id: UUID
+    environment: str
+    trace_id: str
+    request_method: str
+    request_path: str
+    route_template: str
+    sink_argument: str
+    tainted_ranges: list[TaintRangeResponse]
+    stack_frames: list[StackFrameResponse]
+    remote_address: str
+    attack_detected: bool
+    observed_at: datetime | None
+
+    @classmethod
+    def of(cls, occurrence: Any) -> OccurrenceResponse:
+        return cls(
+            id=occurrence.id,
+            environment=occurrence.environment,
+            trace_id=occurrence.trace_id,
+            request_method=occurrence.request_method,
+            request_path=occurrence.request_path,
+            route_template=occurrence.route_template,
+            sink_argument=occurrence.sink_argument,
+            tainted_ranges=[
+                TaintRangeResponse(start=s, length=length, source=source, source_name=name)
+                for s, length, source, name in occurrence.tainted_ranges
+            ],
+            stack_frames=[
+                StackFrameResponse(
+                    declaring_class=declaring_class,
+                    method_name=method,
+                    line_number=line,
+                    application_code=is_app,
+                )
+                for declaring_class, method, line, is_app in occurrence.stack_frames
+            ],
+            remote_address=occurrence.remote_address,
+            attack_detected=occurrence.attack_detected,
+            observed_at=occurrence.observed_at,
+        )
+
+
+class FindingCommentResponse(Schema):
+    id: UUID
+    author_id: UUID | None
+    author_label: str
+    body: str
+    status_from: str | None
+    status_to: str | None
+    created_at: datetime | None
+
+
+class FindingDetailResponse(FindingResponse):
+    occurrences: list[OccurrenceResponse]
+    comments: list[FindingCommentResponse]
+
+    @classmethod
+    def of(cls, finding: Any, occurrences: Any = (), comments: Any = ()) -> FindingDetailResponse:
+        base = FindingResponse.of(finding)
+        return cls(
+            **base.model_dump(),
+            occurrences=[OccurrenceResponse.of(o) for o in occurrences],
+            comments=[FindingCommentResponse(**c) for c in comments],
+        )
+
+
+class TriageRequest(Schema):
+    status: Literal["OPEN", "CONFIRMED", "REMEDIATED", "FALSE_POSITIVE", "ACCEPTED_RISK"]
+    note: str = Field(default="", max_length=2000)
+    #: Only meaningful for ACCEPTED_RISK. Bounded so nobody can accept a risk for a century
+    #: and call it expiry.
+    accepted_for_days: int | None = Field(default=None, ge=1, le=365)
+
+
+class FindingCommentRequest(Schema):
+    body: str = Field(min_length=1, max_length=4000)

@@ -26,6 +26,7 @@ from .entities import (
     Session,
     User,
 )
+from .entities.findings import Finding, Occurrence
 from .value_objects import ApiKeyPrefix, EmailAddress, Slug, TokenHash
 
 # --- Infrastructure services ---------------------------------------------------------
@@ -346,6 +347,59 @@ class AuditRepository(TenantScoped, Protocol):
 
 
 @runtime_checkable
+class FindingRepository(Protocol):
+    """Findings, their evidence and their triage thread.
+
+    Tenant-scoped: obtained only after ``bind_tenant``, so every query here already carries
+    the organization predicate and rides the row-level-security policy.
+    """
+
+    async def resolve_agent_context(self, agent_id: str) -> Any | None:
+        """Which application and environment an agent reports for, or None if unregistered."""
+        ...
+
+    async def get(self, finding_id: UUID) -> Finding | None: ...
+
+    async def get_by_identity(self, identity_hash: str) -> Finding | None: ...
+
+    async def upsert(self, finding: Finding) -> Finding: ...
+
+    async def list_all(
+        self,
+        *,
+        limit: int,
+        cursor: str | None,
+        statuses: list[str] | None = None,
+        severities: list[str] | None = None,
+        rule_key: str | None = None,
+        application_id: UUID | None = None,
+        environment: str | None = None,
+        search: str | None = None,
+    ) -> tuple[list[Finding], str | None]: ...
+
+    async def list_expired_acceptances(self, now: datetime) -> list[Finding]: ...
+
+    async def add_occurrence(self, occurrence: Occurrence) -> None: ...
+
+    async def latest_occurrence_at(self, finding_id: UUID) -> datetime | None: ...
+
+    async def list_occurrences(self, finding_id: UUID, *, limit: int = 20) -> list[Occurrence]: ...
+
+    async def add_comment(
+        self,
+        *,
+        finding_id: UUID,
+        organization_id: UUID,
+        author_id: UUID | None,
+        author_label: str,
+        body: str,
+        status_from: str | None = None,
+        status_to: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def list_comments(self, finding_id: UUID) -> list[dict[str, Any]]: ...
+
+
 class UnitOfWork(Protocol):
     """Transaction boundary.
 
@@ -374,6 +428,11 @@ class UnitOfWork(Protocol):
 
     @property
     def api_key_lookup(self) -> ApiKeyLookup: ...
+
+    @property
+    def findings(self) -> FindingRepository:
+        """Available only after ``bind_tenant``."""
+        ...
 
     async def __aenter__(self) -> UnitOfWork: ...
 

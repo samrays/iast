@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, TypeVar
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import Select, delete, func, or_, select, text, update
+from sqlalchemy import Select, and_, delete, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...application.findings import AgentContext
@@ -48,6 +48,7 @@ from .models import (
     ApplicationEnvironmentRecord,
     ApplicationRecord,
     AuditEventRecord,
+    FindingCommentRecord,
     FindingRecord,
     LicenseRecord,
     MembershipRecord,
@@ -59,7 +60,7 @@ from .models import (
     UserRecord,
     membership_roles,
 )
-from .pagination import decode_cursor, encode_cursor
+from .pagination import decode_cursor, decode_score_cursor, encode_cursor, encode_score_cursor
 
 R = TypeVar("R")
 
@@ -919,3 +920,111 @@ class SqlFindingRepository(_TenantRepository):
             .limit(limit)
         )
         return [m.occurrence_to_domain(r) for r in (await self._session.execute(stmt)).scalars()]
+
+    async def list_all(
+        self,
+        *,
+        limit: int,
+        cursor: str | None,
+        statuses: list[str] | None = None,
+        severities: list[str] | None = None,
+        rule_key: str | None = None,
+        application_id: UUID | None = None,
+        environment: str | None = None,
+        search: str | None = None,
+    ) -> tuple[list[Finding], str | None]:
+        """The queue, worst first.
+
+        Ordered by risk score descending with the id as a tiebreaker, which is what makes the
+        cursor stable: two findings with the same score must always come back in the same
+        order or paging would skip or repeat rows between requests.
+        """
+        stmt = self._scoped()
+        if statuses:
+            stmt = stmt.where(FindingRecord.status.in_(statuses))
+        if severities:
+            stmt = stmt.where(FindingRecord.severity.in_(severities))
+        if rule_key:
+            stmt = stmt.where(FindingRecord.rule_key == rule_key.strip().lower())
+        if application_id is not None:
+            stmt = stmt.where(FindingRecord.application_id == application_id)
+        if environment:
+            stmt = stmt.where(FindingRecord.environments_seen.contains([environment]))
+        if search:
+            stmt = stmt.where(func.lower(FindingRecord.title).like(f"%{search.strip().lower()}%"))
+
+        stmt = stmt.order_by(FindingRecord.risk_score.desc(), FindingRecord.id)
+        if cursor:
+            score, identifier = decode_score_cursor(cursor)
+            stmt = stmt.where(
+                or_(
+                    FindingRecord.risk_score < score,
+                    and_(
+                        FindingRecord.risk_score == score,
+                        FindingRecord.id > identifier,
+                    ),
+                )
+            )
+
+        records = list((await self._session.execute(stmt.limit(limit + 1))).scalars())
+        next_cursor = None
+        if len(records) > limit:
+            records = records[:limit]
+            next_cursor = encode_score_cursor(float(records[-1].risk_score), records[-1].id)
+        return [m.finding_to_domain(r) for r in records], next_cursor
+
+    async def list_expired_acceptances(self, now: datetime) -> list[Finding]:
+        stmt = self._scoped().where(
+            FindingRecord.status == "ACCEPTED_RISK",
+            FindingRecord.accepted_until.is_not(None),
+            FindingRecord.accepted_until <= now,
+        )
+        return [m.finding_to_domain(r) for r in (await self._session.execute(stmt)).scalars()]
+
+    async def add_comment(
+        self,
+        *,
+        finding_id: UUID,
+        organization_id: UUID,
+        author_id: UUID | None,
+        author_label: str,
+        body: str,
+        status_from: str | None = None,
+        status_to: str | None = None,
+    ) -> dict[str, Any]:
+        record = FindingCommentRecord(
+            id=uuid4(),
+            organization_id=organization_id,
+            finding_id=finding_id,
+            author_id=author_id,
+            author_label=author_label[:200],
+            body=body[:4000],
+            status_from=status_from,
+            status_to=status_to,
+        )
+        self._session.add(record)
+        await self._session.flush()
+        return _comment_to_dict(record)
+
+    async def list_comments(self, finding_id: UUID) -> list[dict[str, Any]]:
+        stmt = (
+            select(FindingCommentRecord)
+            .where(
+                FindingCommentRecord.finding_id == finding_id,
+                FindingCommentRecord.organization_id == self._organization_id,
+            )
+            .order_by(FindingCommentRecord.created_at)
+        )
+        return [_comment_to_dict(r) for r in (await self._session.execute(stmt)).scalars()]
+
+
+def _comment_to_dict(record: FindingCommentRecord) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "author_id": record.author_id,
+        "author_label": record.author_label,
+        "body": record.body,
+        "status_from": record.status_from,
+        "status_to": record.status_to,
+        "created_at": record.created_at,
+    }

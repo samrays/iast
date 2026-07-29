@@ -40,6 +40,26 @@ def decode_cursor(cursor: str) -> tuple[datetime, UUID]:
         raise ValidationError("The pagination cursor is not valid.", field="cursor") from exc
 
 
+def encode_score_cursor(score: float, row_id: UUID) -> str:
+    """A cursor for a list ordered by score rather than by time.
+
+    The row id is part of it, not decoration: many findings share a score, and a cursor that
+    carried only the score would skip or repeat every row it tied with.
+    """
+    payload = {"s": float(score), "i": str(row_id)}
+    raw = json.dumps(payload, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def decode_score_cursor(cursor: str) -> tuple[float, UUID]:
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        payload: dict[str, Any] = json.loads(base64.urlsafe_b64decode(cursor + padding))
+        return float(payload["s"]), UUID(str(payload["i"]))
+    except (KeyError, ValueError, TypeError, binascii.Error, json.JSONDecodeError) as exc:
+        raise ValidationError("The pagination cursor is not valid.", field="cursor") from exc
+
+
 def clamp_limit(limit: int | None, *, default: int, maximum: int) -> int:
     if limit is None:
         return default

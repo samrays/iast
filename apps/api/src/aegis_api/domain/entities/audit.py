@@ -80,6 +80,9 @@ class AuditAction(StrEnum):
     AGENT_REGISTERED = "agent.registered"
     AGENT_UPDATED = "agent.updated"
 
+    # Findings
+    FINDING_TRIAGED = "finding.triaged"
+
     # Governance
     AUDIT_LOG_READ = "audit.read"
     PERMISSION_DENIED = "security.permission_denied"
