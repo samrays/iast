@@ -135,9 +135,15 @@ Notes from implementation worth carrying forward:
   workload whose requests cost ~250µs, where the agent's ~30–60µs reads as 11–26%. The same absolute
   cost is under 1% of a realistic 10ms request, but "< 5% on Spring PetClinic" remains unverified
   because PetClinic has not been run.
-- ⬜ **The corpus is ours, not OWASP's.** It is modelled on the Benchmark categories and covers three
-  rule classes. Running the actual WebGoat and OWASP Benchmark suites is the exit criterion and has
-  not been done.
+- ✅ **The OWASP Benchmark has been run** — the real thing, all 2,740 cases, against Tomcat 9 with the
+  agent attached. **52.0% recall and 0.0% false positives** across the six categories the agent
+  implements (53.8% excluding LDAP, whose 27 cases never reached a sink because the Benchmark's
+  embedded directory server did not start). The first run scored 35.8%; diagnosing its misses is
+  what produced the propagator and sink work above.
+- ⬜ WebGoat has not been run.
+- ⬜ **Benchmark recall is 52%, not 90%.** The remaining misses are known and enumerated in
+  `docs/05-runtime-agent-design.md` — collection and array propagation, `String.format`, `split`,
+  `replace`, and the request-body sources — rather than guessed at.
 - ⬜ gRPC transport (see ADR-0010 — the bootstrap loader confines the agent runtime to `java.base`,
   which makes gRPC a restructuring rather than an addition).
 - ⬜ Sources for non-servlet stacks: Spring WebFlux, JAX-RS outside a servlet container.

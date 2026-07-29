@@ -55,3 +55,6 @@ docker/volumes/
 *.log
 .aegis/
 tools/
+
+# Third-party benchmark corpora and their run artefacts (see scripts/benchmark/).
+tools/

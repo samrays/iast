@@ -806,6 +806,162 @@ public final class AgentRuntime {
         }
     }
 
+    /**
+     * A transform that rewrites the value wholesale — {@code URLDecoder.decode} above all.
+     *
+     * <p>Almost every handler that reads a header or a cookie decodes it before doing anything
+     * else, so a propagator that stops here loses the finding on the majority of real code
+     * paths. Measured against the OWASP Benchmark, this single gap appeared in 234 of the 526
+     * defects the agent missed.
+     */
+    public static void onReshapingTransform(String result, Object source) {
+        AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
+        if (runtime == null || result == null || !state.enter()) {
+            return;
+        }
+        try {
+            RequestContext context = state.context();
+            if (context == null || !context.isSampled()) {
+                return;
+            }
+            TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
+            TaintedValue taint = tracker.taintOf(source);
+            if (taint.isTainted()) {
+                tracker.track(result, taint.reshaped(result.length()));
+            }
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            state.exit();
+        }
+    }
+
+    /**
+     * {@code ServletRequest.getHeaders(name)} — an enumeration whose elements are attacker data.
+     *
+     * <p>The enumeration cannot be read here: consuming it would hand the application an empty
+     * one. It is wrapped instead, so each element is tainted at the moment the application takes
+     * it. Returning the original unchanged on any failure keeps the application's contract
+     * exactly as it was.
+     */
+    public static java.util.Enumeration<?> onHeaderEnumeration(
+            java.util.Enumeration<?> values, String name) {
+        AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
+        if (runtime == null || values == null || !state.enter()) {
+            return values;
+        }
+        try {
+            if (!runtime.governor.level().allowsDataflow()) {
+                return values;
+            }
+            RequestContext context = state.context();
+            if (context == null || !context.isSampled()) {
+                return values;
+            }
+            return new TaintingEnumeration(values, name);
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+            return values;
+        } finally {
+            state.exit();
+        }
+    }
+
+    /** Taints each element as the application takes it, and is otherwise transparent. */
+    private static final class TaintingEnumeration implements java.util.Enumeration<Object> {
+
+        private final java.util.Enumeration<?> delegate;
+        private final String name;
+
+        TaintingEnumeration(java.util.Enumeration<?> delegate, String name) {
+            this.delegate = delegate;
+            this.name = name;
+        }
+
+        @Override
+        public boolean hasMoreElements() {
+            return delegate.hasMoreElements();
+        }
+
+        @Override
+        public Object nextElement() {
+            Object value = delegate.nextElement();
+            if (value instanceof String text) {
+                onSource(text, dev.aegis.agent.taint.SourceKind.HEADER, name);
+            }
+            return value;
+        }
+    }
+
+    /**
+     * {@code ProcessBuilder.start()} — the execution point, whatever built the command.
+     *
+     * <p>Hooked here rather than on {@code command(...)} because a builder can be filled by its
+     * constructor, by {@code command(List)}, or by mutating the list it returns. {@code start}
+     * is the one place all of those meet.
+     */
+    public static void onProcessStart(java.lang.ProcessBuilder builder) {
+        if (instance == null || builder == null) {
+            return;
+        }
+        try {
+            for (String argument : builder.command()) {
+                // Deliberately outside the guard: onSink takes it, and it captures the stack,
+                // which has to show the application frame that started the process.
+                onSink(argument, RuleClass.COMMAND_INJECTION, "java.lang.ProcessBuilder#start()");
+            }
+        } catch (Throwable t) {
+            instance.hookFailed(t);
+        }
+    }
+
+    /**
+     * {@code PrintWriter.format/printf} — a format string written to the response body.
+     *
+     * <p>Every argument is checked, not just the format string: a tainted value substituted into
+     * the page is reflected XSS just as surely as a tainted template is.
+     */
+    public static void onResponseFormat(Object target, Object[] arguments) {
+        AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
+        if (runtime == null || arguments == null || !state.enter()) {
+            return;
+        }
+        boolean isResponse;
+        try {
+            RequestContext context = state.context();
+            isResponse = context != null && context.isResponseChannel(target);
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+            return;
+        } finally {
+            state.exit();
+        }
+        if (!isResponse) {
+            return;
+        }
+        for (Object argument : arguments) {
+            if (argument instanceof String) {
+                onSink(
+                        argument,
+                        RuleClass.REFLECTED_XSS,
+                        "java.io.PrintWriter#format(String,Object...)");
+            } else if (argument instanceof Object[] nested) {
+                for (Object element : nested) {
+                    onSink(
+                            element,
+                            RuleClass.REFLECTED_XSS,
+                            "java.io.PrintWriter#format(String,Object...)");
+                }
+            }
+        }
+    }
+
     /** A length-preserving transform such as {@code toUpperCase} or {@code intern}. */
     public static void onPreservingTransform(String result, Object source) {
         AgentRuntime runtime = instance;

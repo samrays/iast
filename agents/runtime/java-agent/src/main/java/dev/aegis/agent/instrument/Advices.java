@@ -215,6 +215,68 @@ public final class Advices {
         }
     }
 
+    /** {@code URLDecoder.decode} and other whole-value rewrites. */
+    public static final class Reshaping {
+        private Reshaping() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.Argument(0) Object source, @Advice.Return String result) {
+            AgentRuntime.onReshapingTransform(result, source);
+        }
+    }
+
+    /** {@code ServletRequest.getHeaders(name)} — wrap so each element is tainted when taken. */
+    public static final class HeaderEnumeration {
+        private HeaderEnumeration() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.Argument(0) String name,
+                @Advice.Return(readOnly = false) java.util.Enumeration<?> values) {
+            values = AgentRuntime.onHeaderEnumeration(values, name);
+        }
+    }
+
+    /**
+     * {@code Connection.prepareStatement(sql)} and {@code prepareCall(sql)}.
+     *
+     * <p>A prepared statement is only safe because its <em>parameters</em> are bound. Its query
+     * text is not, and a concatenated string handed to {@code prepareStatement} is exactly as
+     * injectable as one handed to {@code Statement.execute} — a distinction that cost 80 missed
+     * defects on the OWASP Benchmark before this existed.
+     */
+    public static final class JdbcPrepare {
+        private JdbcPrepare() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(@Advice.Argument(0) Object sql) {
+            AgentRuntime.onSink(
+                    sql, RuleClass.SQL_INJECTION, "java.sql.Connection#prepareStatement(String)");
+        }
+    }
+
+    /** {@code ProcessBuilder.start()} — every path that builds a command ends here. */
+    public static final class ProcessStart {
+        private ProcessStart() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(@Advice.This ProcessBuilder builder) {
+            AgentRuntime.onProcessStart(builder);
+        }
+    }
+
+    /** {@code PrintWriter.format/printf} into the response body. */
+    public static final class ResponseFormat {
+        private ResponseFormat() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(
+                @Advice.This Object target, @Advice.AllArguments Object[] arguments) {
+            AgentRuntime.onResponseFormat(target, arguments);
+        }
+    }
+
     /** {@code Runtime.exec(String)} and {@code ProcessBuilder.command(...)}. */
     public static final class CommandExec {
         private CommandExec() {}

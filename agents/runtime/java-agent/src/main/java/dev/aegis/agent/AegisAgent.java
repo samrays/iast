@@ -297,6 +297,33 @@ public final class AegisAgent {
                                                                                                 String
                                                                                                         .class)))));
 
+        // Whole-value rewrites. URL decoding is what a handler does to a header or cookie before
+        // it does anything else, so taint that stops here is taint that never reaches a sink.
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.named("java.net.URLDecoder"),
+                        Advices.Reshaping.class,
+                        ElementMatchers.named("decode")
+                                .and(ElementMatchers.takesArgument(0, String.class))
+                                .and(ElementMatchers.returns(String.class)));
+
+        // Prepared statements bind their parameters, not their query text.
+        builder =
+                advise(
+                        builder,
+                        implementing("Connection", "java.sql.Connection"),
+                        Advices.JdbcPrepare.class,
+                        ElementMatchers.namedOneOf("prepareStatement", "prepareCall")
+                                .and(ElementMatchers.takesArgument(0, String.class)));
+
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.named("java.lang.ProcessBuilder"),
+                        Advices.ProcessStart.class,
+                        ElementMatchers.named("start"));
+
         builder = installHttpTransformers(builder);
         builder = installAsyncTransformers(builder);
         builder = installSinkTransformers(builder);
@@ -362,6 +389,25 @@ public final class AegisAgent {
                         Advices.ResponseWrite.class,
                         ElementMatchers.namedOneOf("write", "print", "println")
                                 .and(ElementMatchers.takesArgument(0, String.class)));
+        builder =
+                advise(
+                        builder,
+                        implementing("Writer", "java.io.Writer"),
+                        Advices.ResponseFormat.class,
+                        ElementMatchers.namedOneOf("format", "printf"));
+
+        // getHeaders returns an enumeration the agent must not consume, so it wraps it.
+        builder =
+                advise(
+                        builder,
+                        implementing(
+                                "Request",
+                                "jakarta.servlet.ServletRequest",
+                                "javax.servlet.ServletRequest"),
+                        Advices.HeaderEnumeration.class,
+                        ElementMatchers.named("getHeaders")
+                                .and(ElementMatchers.takesArgument(0, String.class))
+                                .and(ElementMatchers.isPublic()));
 
         // Open redirect and header injection, on the same response.
         builder =

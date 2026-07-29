@@ -179,6 +179,48 @@ public final class TaintedValue {
     }
 
     /**
+     * A transform that rewrites the value wholesale — URL decoding, unescaping, normalization.
+     *
+     * <p>The output has no positional relationship to the input, so per-character offsets cannot
+     * survive: {@code %3Cscript%3E} becoming {@code <script>} moves every character. The result
+     * is therefore covered by a single range and marked <b>imprecise</b>, which is the honest
+     * description — the agent knows the whole value derives from this source and no longer knows
+     * which characters map where.
+     *
+     * <p>The alternative implementations are both worse. Keeping the old offsets would point a
+     * developer at the wrong characters, and dropping the taint would lose the finding entirely —
+     * and losing it silently, since decoding a parameter is what almost every handler does first.
+     *
+     * <p>Sanitization is preserved: a value that was HTML-escaped and then URL-decoded is still
+     * not an XSS risk, and the cleared-for set is carried across.
+     */
+    public TaintedValue reshaped(int newLength) {
+        if (!isTainted() || newLength <= 0) {
+            return empty();
+        }
+        TaintRange first = ranges.get(0);
+        java.util.Set<RuleClass> cleared = first.clearedFor();
+        for (TaintRange range : ranges) {
+            // The intersection, never the union: a rule only counts as sanitized if every part
+            // of the value was sanitized for it. Taking the union here would launder taint.
+            cleared = intersect(cleared, range.clearedFor());
+        }
+        return normalize(
+                List.of(new TaintRange(0, newLength, first.source(), first.sourceName(), cleared)),
+                true);
+    }
+
+    private static java.util.Set<RuleClass> intersect(
+            java.util.Set<RuleClass> left, java.util.Set<RuleClass> right) {
+        if (left.isEmpty() || right.isEmpty()) {
+            return java.util.Set.of();
+        }
+        java.util.Set<RuleClass> both = new java.util.LinkedHashSet<>(left);
+        both.retainAll(right);
+        return both;
+    }
+
+    /**
      * {@code trim()} and friends: characters removed from the front shift everything left.
      */
     public TaintedValue trimmed(int removedFromStart, int newLength) {
