@@ -121,6 +121,32 @@ The JVM equivalent of that column was the bootstrap class loader confining the r
 for each new agent is the single highest-value thing to do, because it determines the shape of
 everything else.
 
+### Node's constraint, established (2026-07-29)
+
+`agents/runtime/node-agent/spike/context-spike.mjs` answers it before any agent code exists.
+`AsyncLocalStorage` carries a request context across **await, promise chains, `setTimeout`,
+`EventEmitter` listeners and `for await` over streams** — 7 of 8 cases pass, including no leakage
+between concurrent requests and a correctly empty context outside any request.
+
+It does **not** survive a **pooled callback**:
+
+```
+ FAIL  inside a pooled callback    null    the case that decides the design
+```
+
+A connection pool accepts a callback during the request and invokes it later from its own async
+context — one created before any request existed. The context does not follow, so with
+`AsyncLocalStorage` alone **every database sink in every pooled application is invisible**. That is
+most applications, and the most important sink.
+
+The consequence for the design: the Node agent cannot treat context as ambient. It must **bind the
+context to the callback at enqueue time** — `AsyncResource.bind`, or an explicit wrap where work is
+handed off — which is structurally the same fix as `AgentRuntime.wrapForHandoff` on the JVM, for
+the same reason. The difference is that on the JVM it was an enhancement after the synchronous path
+worked, and in Node it is load-bearing from the first line.
+
+Worth noting what this cost: one file and one command, run before the first hook was written.
+
 ---
 
 ## 5. What "done" means
