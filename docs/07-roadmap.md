@@ -150,10 +150,26 @@ Notes from implementation worth carrying forward:
 - ⬜ Context propagation through `CompletableFuture` chains and Reactor.
 - ⬜ Request-body taint tracking. Currently reported as a coverage gap rather than silently missed.
 
-**Exit criteria:** WebGoat and OWASP Benchmark runs produce the expected true positives with zero false
-positives on the sanitized control set; overhead budget met on PetClinic; agent survives control-plane
-outage (✅ — verified by `ServletIT`, which points the agent at a refused port and asserts the finding
-is on disk afterwards).
+**Exit criteria — closed 2026-07-29 with the gate NOT met, deliberately.**
+
+| Criterion | Result |
+|---|---|
+| Zero false positives on the sanitized control set | ✅ **0 of 1,572** in-scope OWASP Benchmark cases |
+| Agent survives a control-plane outage | ✅ verified by `ServletIT` against a refused port |
+| Benchmark produces the expected true positives | ❌ **52% recall**, not the ~90% this implies |
+| WebGoat run | ❌ not run |
+| Overhead budget met on PetClinic | ❌ measured on a synthetic Jetty + H2 workload instead (+5.8%) |
+
+**Why the phase closes anyway.** Phase 4's own goal is *"a real vulnerability in a real application
+appears in the console"* — and no amount of further agent work can satisfy it. A finding currently
+reaches the gateway, lands in the durable stream, and stops there; the console half of that sentence
+lives in Phase 5. Holding this gate shut keeps the product in a state where it detects genuine
+vulnerabilities and can show them to nobody.
+
+The unmet criteria are **carried into Phase 5 as named debt, not dropped**, and the recall figure now
+has a forcing function in Phase 5's exit criteria rather than an open-ended intention. Every remaining
+miss is additive work against a taint engine already demonstrated correct — no redesign is implied by
+deferring it, which is exactly why deferring it is safe.
 
 ---
 
@@ -170,8 +186,18 @@ is on disk afterwards).
 - ClickHouse ingestion, materialized rollups, trace explorer API.
 - SIEM export (OCSF + CEF), SARIF export for code scanning.
 
+### Debt carried in from Phase 4
+
+- **Agent recall.** 52% on the OWASP Benchmark. Largest buckets, in order: collection and array
+  propagation, the reshaping propagators beyond `URLDecoder` (`format`, `split`, `replace`), and
+  request-body sources.
+- WebGoat unrun; overhead unverified on Spring PetClinic; WebFlux and Reactor sources absent.
+
 **Exit criteria:** dedup stable across restarts and refactors; 1M-event replay produces a deterministic
-finding set; blocking verified to trigger only on confirmed exploitation.
+finding set; blocking verified to trigger only on confirmed exploitation; **and the carried agent debt
+is retired — OWASP Benchmark recall ≥ 80% with false positives still at zero, and the overhead budget
+verified on Spring PetClinic.** The recall target is stated as a number here precisely because
+"improve detection" without one is how it never happens.
 
 ---
 
