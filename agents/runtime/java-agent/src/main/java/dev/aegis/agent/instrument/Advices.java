@@ -215,6 +215,16 @@ public final class Advices {
         }
     }
 
+    /** {@code String.split(regex)} — every piece derives from the string that was split. */
+    public static final class Split {
+        private Split() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(@Advice.This Object self, @Advice.Return Object[] pieces) {
+            AgentRuntime.onSplit(pieces, self);
+        }
+    }
+
     /** {@code URLDecoder.decode} and other whole-value rewrites. */
     public static final class Reshaping {
         private Reshaping() {}

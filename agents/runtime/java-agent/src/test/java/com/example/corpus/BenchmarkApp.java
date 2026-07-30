@@ -130,6 +130,8 @@ public final class BenchmarkApp {
 
         // --- Cookie as a source -----------------------------------------------------------
         register("/cookie/sql", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
+        register("/split/first", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
+        register("/split/constant", Expectation.SAFE, "", SQL_PAYLOAD);
         register("/cookie/decoded", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
         register("/cookie/constant", Expectation.SAFE, "", SQL_PAYLOAD);
 
@@ -262,6 +264,8 @@ public final class BenchmarkApp {
                 case "/log/constant" -> logConstant(name);
                 case "/deser/read" -> deserializeFromInput(name);
                 case "/deser/constant" -> deserializeConstant(name);
+                case "/split/first" -> splitInjection(name);
+                case "/split/constant" -> splitConstant(name);
                 case "/cookie/sql" -> cookieInjection(request);
                 case "/cookie/decoded" -> cookieDecoded(request);
                 case "/cookie/constant" -> cookieConstant(request);
@@ -330,6 +334,26 @@ public final class BenchmarkApp {
         private String sqlIdentity(String name) throws Exception {
             String constant = "alice";
             return query("SELECT name FROM users WHERE name = '" + constant + "'")
+                    + ":"
+                    + name.length();
+        }
+
+        /**
+         * The Benchmark's split shape: one parameter carved into pieces, one piece concatenated.
+         *
+         * <p>Splitting removes the delimiters, so no piece keeps the offsets it had in the
+         * original. The taint has to survive as provenance even though the positions cannot.
+         */
+        private String splitInjection(String name) throws Exception {
+            String piece = (name + ",unused").split(",")[0];
+            StringBuilder sql = new StringBuilder("SELECT name FROM users WHERE name = '");
+            sql.append(piece).append("'");
+            return query(sql.toString());
+        }
+
+        private String splitConstant(String name) throws Exception {
+            String piece = "alice,bob".split(",")[0];
+            return query("SELECT name FROM users WHERE name = '" + piece + "'")
                     + ":"
                     + name.length();
         }

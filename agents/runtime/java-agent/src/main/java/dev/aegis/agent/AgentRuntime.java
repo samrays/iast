@@ -841,6 +841,45 @@ public final class AgentRuntime {
     }
 
     /**
+     * {@code String.split(regex)} — one tainted value becomes several.
+     *
+     * <p>Each piece is reshaped rather than clipped. The split removes the delimiters, so no
+     * element keeps the offsets it had in the original, and carrying them over would point a
+     * developer at the wrong characters. Marking each piece wholly derived is the honest
+     * description: the agent knows where the value came from and no longer knows the mapping.
+     */
+    public static void onSplit(Object[] pieces, Object source) {
+        AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
+        if (runtime == null || pieces == null || !state.enter()) {
+            return;
+        }
+        try {
+            RequestContext context = state.context();
+            if (context == null || !context.isSampled()) {
+                return;
+            }
+            TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
+            TaintedValue taint = tracker.taintOf(source);
+            if (!taint.isTainted()) {
+                return;
+            }
+            for (Object piece : pieces) {
+                if (piece instanceof String text && !text.isEmpty()) {
+                    tracker.track(text, taint.reshaped(text.length()));
+                }
+            }
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            state.exit();
+        }
+    }
+
+    /**
      * {@code ServletRequest.getHeaders(name)} — an enumeration whose elements are attacker data.
      *
      * <p>The enumeration cannot be read here: consuming it would hand the application an empty

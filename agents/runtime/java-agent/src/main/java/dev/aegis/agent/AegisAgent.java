@@ -297,6 +297,14 @@ public final class AegisAgent {
                                                                                                 String
                                                                                                         .class)))));
 
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.named("java.lang.String"),
+                        Advices.Split.class,
+                        ElementMatchers.named("split")
+                                .and(ElementMatchers.returns(String[].class)));
+
         // Whole-value rewrites. URL decoding is what a handler does to a header or cookie before
         // it does anything else, so taint that stops here is taint that never reaches a sink.
         builder =
