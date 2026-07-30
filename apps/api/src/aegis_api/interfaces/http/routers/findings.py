@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import JSONResponse
 
 from ....application.findings import (
@@ -15,6 +15,7 @@ from ....application.findings import (
     TriageFinding,
 )
 from ....application.sarif import ExportFindingsAsSarif
+from ....application.siem import ExportFindingsForSiem
 from ....domain.entities.findings import FindingStatus
 from ....domain.permissions import Permission
 from ..dependencies import ContainerDep, PrincipalDep, SettingsDep, requires
@@ -90,6 +91,29 @@ async def export_sarif(
         content=document,
         headers={"Content-Disposition": 'attachment; filename="aegis-findings.sarif"'},
     )
+
+
+@router.get(
+    "/export/siem",
+    summary="Export findings as OCSF events or CEF lines",
+    response_model=None,
+)
+async def export_siem(
+    principal: PrincipalDep,
+    container: ContainerDep,
+    settings: SettingsDep,
+    fmt: Annotated[str, Query(pattern="^(ocsf|cef)$")] = "ocsf",
+    application_id: UUID | None = None,
+) -> Response:
+    payload, media_type = await ExportFindingsForSiem(container.unit_of_work()).execute(
+        principal=principal,
+        fmt=fmt,
+        application_id=application_id,
+        product_version=settings.version,
+    )
+    if isinstance(payload, str):
+        return Response(content=payload, media_type=media_type)
+    return JSONResponse(content=payload)
 
 
 @router.get(
