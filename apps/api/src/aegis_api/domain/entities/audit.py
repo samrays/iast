@@ -86,6 +86,10 @@ class AuditAction(StrEnum):
     # Detection policy
     RULE_TOGGLED = "rule.toggled"
 
+    # AI
+    AI_ANALYSIS_REQUESTED = "ai.analysis_requested"
+    AI_ANALYSIS_REVIEWED = "ai.analysis_reviewed"
+
     # Governance
     AUDIT_LOG_READ = "audit.read"
     PERMISSION_DENIED = "security.permission_denied"
