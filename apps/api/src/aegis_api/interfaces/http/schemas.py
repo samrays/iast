@@ -659,3 +659,33 @@ class TriageRequest(Schema):
 
 class FindingCommentRequest(Schema):
     body: str = Field(min_length=1, max_length=4000)
+
+
+class RuleResponse(Schema):
+    key: str
+    title: str
+    severity: str
+    cwe_id: int | None
+    description: str
+    remediation: str
+    enabled: bool
+    disabled_reason: str
+
+    @classmethod
+    def of(cls, view: Any) -> RuleResponse:
+        return cls(
+            key=view.rule.key,
+            title=view.rule.title,
+            severity=view.rule.severity.value,
+            cwe_id=view.rule.cwe_id,
+            description=view.rule.description,
+            remediation=view.rule.remediation,
+            enabled=view.enabled,
+            disabled_reason=view.disabled_reason,
+        )
+
+
+class RuleToggleRequest(Schema):
+    enabled: bool
+    #: Required when switching a rule off; the domain rejects a blank one.
+    reason: str = Field(default="", max_length=500)

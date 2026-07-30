@@ -83,6 +83,9 @@ class AuditAction(StrEnum):
     # Findings
     FINDING_TRIAGED = "finding.triaged"
 
+    # Detection policy
+    RULE_TOGGLED = "rule.toggled"
+
     # Governance
     AUDIT_LOG_READ = "audit.read"
     PERMISSION_DENIED = "security.permission_denied"

@@ -27,6 +27,7 @@ from .entities import (
     User,
 )
 from .entities.findings import Finding, Occurrence
+from .entities.rules import TenantRuleSettings
 from .value_objects import ApiKeyPrefix, EmailAddress, Slug, TokenHash
 
 # --- Infrastructure services ---------------------------------------------------------
@@ -400,6 +401,19 @@ class FindingRepository(Protocol):
     async def list_comments(self, finding_id: UUID) -> list[dict[str, Any]]: ...
 
 
+class RuleSettingsRepository(Protocol):
+    """One organization's rule opt-outs.
+
+    ``get`` never returns None: a tenant who has never changed anything has every rule on, and
+    representing that as an absent row would make every caller handle a null that means "the
+    default".
+    """
+
+    async def get(self) -> TenantRuleSettings: ...
+
+    async def save(self, settings: TenantRuleSettings) -> TenantRuleSettings: ...
+
+
 class UnitOfWork(Protocol):
     """Transaction boundary.
 
@@ -431,6 +445,11 @@ class UnitOfWork(Protocol):
 
     @property
     def findings(self) -> FindingRepository:
+        """Available only after ``bind_tenant``."""
+        ...
+
+    @property
+    def rule_settings(self) -> RuleSettingsRepository:
         """Available only after ``bind_tenant``."""
         ...
 

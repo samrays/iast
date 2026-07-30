@@ -40,6 +40,7 @@ from ...domain.entities import (
     User,
 )
 from ...domain.entities.audit import GENESIS_HASH
+from ...domain.entities.rules import TenantRuleSettings
 from ...domain.value_objects import ApiKeyPrefix, EmailAddress, Slug, TokenHash
 from . import mappers as m
 from .models import (
@@ -57,6 +58,7 @@ from .models import (
     OrganizationRecord,
     RoleRecord,
     SessionRecord,
+    TenantRuleSettingsRecord,
     UserRecord,
     membership_roles,
 )
@@ -1030,3 +1032,41 @@ def _comment_to_dict(record: FindingCommentRecord) -> dict[str, Any]:
         "status_to": record.status_to,
         "created_at": record.created_at,
     }
+
+
+class SqlRuleSettingsRepository(_TenantRepository):
+    """One row per tenant, holding which rules they have switched off."""
+
+    async def get(self) -> TenantRuleSettings:
+        """Never returns None.
+
+        A tenant who has never touched their settings has every rule on, and representing that
+        as an absent row would make every caller handle a null that means "the default". The
+        row is created lazily on the first change instead.
+        """
+        record = (
+            await self._session.execute(
+                select(TenantRuleSettingsRecord).where(
+                    TenantRuleSettingsRecord.organization_id == self._organization_id
+                )
+            )
+        ).scalar_one_or_none()
+        if record is None:
+            return TenantRuleSettings(organization_id=self._organization_id)
+        return m.rule_settings_to_domain(record)
+
+    async def save(self, settings: TenantRuleSettings) -> TenantRuleSettings:
+        record = (
+            await self._session.execute(
+                select(TenantRuleSettingsRecord).where(
+                    TenantRuleSettingsRecord.organization_id == self._organization_id
+                )
+            )
+        ).scalar_one_or_none()
+        if record is None:
+            record = m.rule_settings_to_record(settings)
+            self._session.add(record)
+        else:
+            record.disabled = dict(settings.disabled)
+        await self._session.flush()
+        return m.rule_settings_to_domain(record)

@@ -37,6 +37,7 @@ from ...domain.entities import (
     User,
     UserStatus,
 )
+from ...domain.entities.rules import TenantRuleSettings
 from ...domain.permissions import Permission
 from ...domain.value_objects import ApiKeyPrefix, EmailAddress, PasswordHash, Slug, TokenHash
 from .models import (
@@ -53,6 +54,7 @@ from .models import (
     OrganizationRecord,
     RoleRecord,
     SessionRecord,
+    TenantRuleSettingsRecord,
     UserRecord,
 )
 
@@ -704,4 +706,24 @@ def occurrence_to_record(entity: Occurrence) -> OccurrenceRecord:
         remote_address=entity.remote_address or None,
         attack_detected=entity.attack_detected,
         observed_at=entity.observed_at,
+    )
+
+
+# --- Rule settings ------------------------------------------------------------------
+
+
+def rule_settings_to_domain(record: TenantRuleSettingsRecord) -> TenantRuleSettings:
+    return TenantRuleSettings(
+        id=record.id,
+        organization_id=record.organization_id,
+        disabled=dict(record.disabled),
+        updated_at=record.updated_at,
+    )
+
+
+def rule_settings_to_record(entity: TenantRuleSettings) -> TenantRuleSettingsRecord:
+    return TenantRuleSettingsRecord(
+        id=entity.id,
+        organization_id=entity.organization_id,
+        disabled=dict(entity.disabled),
     )
