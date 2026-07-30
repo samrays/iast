@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     # --- Tokens and crypto ---------------------------------------------------
     jwt_secret: str = ""
     jwt_algorithm: Literal["HS256", "HS512", "RS256", "EdDSA"] = "HS256"
+    #: Base64 Ed25519 public key that rule bundles must be signed with. Empty means no bundle
+    #: can be installed, which is the safe default: the built-in catalogue still applies.
+    rule_signing_public_key: str = ""
     jwt_issuer: str = "https://api.aegis.local"
     jwt_private_key: str | None = None
     jwt_public_key: str | None = None

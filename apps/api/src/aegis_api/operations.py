@@ -20,10 +20,13 @@ import anyio.to_thread
 from .application.auth import RegisterOrganization
 from .application.context import RequestContext
 from .application.findings import ProcessingResult, ProcessRuntimeEvents
+from .application.rules import PublishRuleBundle
 from .container import Container
 from .domain.entities import LicenseTier
+from .domain.entities.rules import RuleBundle
 from .domain.errors import NotFoundError
 from .domain.value_objects import Slug
+from .infrastructure.security.bundle_signing import verifier_for
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,3 +222,16 @@ def _merge(into: ProcessingResult, batch: ProcessingResult) -> None:
     for rejection in batch.rejections:
         if len(into.rejections) < 50:
             into.rejections.append(rejection)
+
+
+async def publish_rule_bundle(
+    container: Container, *, canonical_bytes: bytes, signature: bytes, public_key: str
+) -> RuleBundle:
+    """Verify a signed catalogue and install it.
+
+    Takes bytes rather than paths: reading files is the caller's job, and doing it here would
+    block the event loop as well as making the operation trust a path it cannot verify.
+    """
+    return await PublishRuleBundle(container.unit_of_work(), verifier_for(public_key)).execute(
+        canonical_bytes=canonical_bytes, signature=signature
+    )

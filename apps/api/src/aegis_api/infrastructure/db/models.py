@@ -23,6 +23,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Table,
@@ -693,4 +694,29 @@ class TenantRuleSettingsRecord(Base, TimestampMixin):
     #: rule key -> the reason somebody gave for turning it off.
     disabled: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+
+
+class RuleBundleRecord(Base):
+    """An installed, signed rule catalogue.
+
+    Deliberately **not** tenant-scoped and deliberately without row-level security: the
+    catalogue is published by the vendor, not by a customer. A tenant-writable rule set would
+    let one organization decide what the engine detects for everyone.
+
+    The canonical bytes are stored verbatim alongside the signature so the pair can be
+    re-verified at any time — after a restore, or when somebody asks what exactly was signed.
+    Re-serializing from parsed rows to check a signature would only prove the serializer is
+    self-consistent.
+    """
+
+    __tablename__ = "rule_bundles"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    canonical_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    signature: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    installed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )

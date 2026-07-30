@@ -4,9 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from ..domain.entities.audit import AuditAction
-from ..domain.entities.rules import Rule, TenantRuleSettings, builtin_catalogue
+from ..domain.entities.rules import (
+    BundleRejectedError,
+    Rule,
+    RuleBundle,
+    TenantRuleSettings,
+    accept_bundle,
+    builtin_catalogue,
+)
 from ..domain.errors import NotFoundError
 from ..domain.permissions import Permission
 from ..domain.ports import UnitOfWork
@@ -39,7 +47,10 @@ class ListRules:
         async with self._uow as uow:
             await uow.bind_tenant(principal.organization_id)
             settings = await uow.rule_settings.get()
-        catalogue = builtin_catalogue(_CATALOGUE_PUBLISHED_AT)
+            installed = await uow.rule_bundles.current()
+        # A published bundle supersedes the built-in catalogue; without one, the compiled
+        # rules are what this build detects, so they are what the tenant sees.
+        catalogue = installed[0] if installed else builtin_catalogue(_CATALOGUE_PUBLISHED_AT)
         return [
             RuleView(
                 rule=rule,
@@ -67,7 +78,9 @@ class SetRuleEnabled:
         self, *, principal: Principal, rule_key: str, enabled: bool, reason: str = ""
     ) -> RuleView:
         principal.require(Permission.POLICY_WRITE)
-        catalogue = builtin_catalogue(_CATALOGUE_PUBLISHED_AT)
+        async with self._uow as uow:
+            installed = await uow.rule_bundles.current()
+        catalogue = installed[0] if installed else builtin_catalogue(_CATALOGUE_PUBLISHED_AT)
         rule = catalogue.rule(rule_key.strip().lower())
         if rule is None:
             # Refused rather than stored. Accepting an unknown key would let the settings row
@@ -100,3 +113,39 @@ class SetRuleEnabled:
                 enabled=settings.is_enabled(rule.key),
                 disabled_reason=settings.disabled.get(rule.key, ""),
             )
+
+
+class PublishRuleBundle:
+    """Verify and install a signed catalogue.
+
+    Not exposed over the tenant API. Publishing is a vendor action performed by an operator
+    with the bundle and its detached signature; putting it behind a console endpoint would
+    make the catalogue writable by whoever holds a session, which is exactly what signing
+    exists to prevent.
+    """
+
+    def __init__(self, uow: UnitOfWork, verify: Any) -> None:
+        self._uow = uow
+        self._verify = verify
+
+    async def execute(self, *, canonical_bytes: bytes, signature: bytes) -> RuleBundle:
+        # Parsed from the bytes that were signed, never re-serialized from a parsed form: a
+        # verifier checking its own serializer's output proves only that the serializer is
+        # self-consistent.
+        candidate = RuleBundle.from_canonical_bytes(canonical_bytes)
+        if candidate.canonical_bytes() != canonical_bytes:
+            raise BundleRejectedError(
+                "The bundle is not in canonical form; re-encode it before signing."
+            )
+
+        async with self._uow as uow:
+            installed = await uow.rule_bundles.installed_version()
+            accepted = accept_bundle(
+                candidate=candidate,
+                signature=signature,
+                verify=self._verify,
+                installed_version=installed,
+            )
+            await uow.rule_bundles.install(accepted, signature)
+            await uow.commit()
+            return accepted

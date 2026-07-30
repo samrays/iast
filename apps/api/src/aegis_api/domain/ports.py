@@ -27,7 +27,7 @@ from .entities import (
     User,
 )
 from .entities.findings import Finding, Occurrence
-from .entities.rules import TenantRuleSettings
+from .entities.rules import RuleBundle, TenantRuleSettings
 from .value_objects import ApiKeyPrefix, EmailAddress, Slug, TokenHash
 
 # --- Infrastructure services ---------------------------------------------------------
@@ -414,6 +414,21 @@ class RuleSettingsRepository(Protocol):
     async def save(self, settings: TenantRuleSettings) -> TenantRuleSettings: ...
 
 
+class RuleBundleRepository(Protocol):
+    """Installed catalogue bundles.
+
+    Not tenant-scoped, unlike everything else obtained from the unit of work: the catalogue is
+    published by the vendor, and a tenant-writable rule set would let one organization decide
+    what the engine detects for everyone.
+    """
+
+    async def current(self) -> tuple[RuleBundle, int] | None: ...
+
+    async def installed_version(self) -> int | None: ...
+
+    async def install(self, bundle: RuleBundle, signature: bytes) -> None: ...
+
+
 class UnitOfWork(Protocol):
     """Transaction boundary.
 
@@ -442,6 +457,11 @@ class UnitOfWork(Protocol):
 
     @property
     def api_key_lookup(self) -> ApiKeyLookup: ...
+
+    @property
+    def rule_bundles(self) -> RuleBundleRepository:
+        """Available without ``bind_tenant`` — the catalogue is not tenant data."""
+        ...
 
     @property
     def findings(self) -> FindingRepository:

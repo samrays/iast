@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TypeVar
 
 import typer
@@ -16,7 +17,9 @@ from . import operations
 from .config import get_settings
 from .container import Container, build_container
 from .domain.entities import LicenseTier
+from .domain.entities.rules import RuleBundle
 from .domain.errors import DomainError
+from .infrastructure.security.bundle_signing import generate_keypair, sign_with
 
 app = typer.Typer(help="Aegis IAST control-plane operations.", no_args_is_help=True)
 
@@ -136,6 +139,72 @@ def process_events(
         typer.secho(f"{result.rejected} event(s) rejected:", fg=typer.colors.YELLOW)
         for rejection in result.rejections[:10]:
             typer.echo(f"  - {rejection}")
+
+
+@app.command("rules-keygen")
+def rules_keygen() -> None:
+    """Generate a rule-signing keypair.
+
+    The private half is printed once and never stored by this service. It belongs wherever
+    bundles are published from, which should not be a machine that also serves traffic.
+    """
+    private, public = generate_keypair()
+    typer.secho("Rule signing keypair generated.", fg=typer.colors.GREEN)
+    typer.secho(f"  private : {private}", fg=typer.colors.YELLOW)
+    typer.echo(f"  public  : {public}")
+    typer.echo(
+        "  (set AEGIS_RULE_SIGNING_PUBLIC_KEY to the public half; keep the private half offline)"
+    )
+
+
+@app.command("rules-sign")
+def rules_sign(
+    bundle: Path = typer.Argument(..., help="Canonical bundle JSON to sign."),
+    private_key: str = typer.Option(..., help="Base64 Ed25519 private key."),
+    out: Path = typer.Option(None, help="Signature file. Defaults to <bundle>.sig."),
+) -> None:
+    """Sign a bundle. Run this where the signing key lives, not on a server."""
+    payload = bundle.read_bytes()
+    # Refuse to sign anything that is not already canonical: a signature over a
+    # pretty-printed document would fail verification later and be maddening to diagnose.
+    parsed = RuleBundle.from_canonical_bytes(payload)
+    if parsed.canonical_bytes() != payload:
+        typer.secho("Refusing to sign: the bundle is not in canonical form.", fg=typer.colors.RED)
+        raise typer.Exit(code=2)
+
+    target = out or bundle.with_suffix(bundle.suffix + ".sig")
+    target.write_bytes(sign_with(private_key, payload))
+    typer.secho(f"Signed version {parsed.version} -> {target}", fg=typer.colors.GREEN)
+
+
+@app.command("rules-publish")
+def rules_publish(
+    bundle: Path = typer.Argument(..., help="Canonical bundle JSON."),
+    signature: Path = typer.Argument(..., help="Detached signature."),
+) -> None:
+    """Verify and install a signed catalogue."""
+    settings = get_settings()
+    payload = bundle.read_bytes()
+    signature_bytes = signature.read_bytes()
+    try:
+        installed = _run(
+            lambda container: operations.publish_rule_bundle(
+                container,
+                canonical_bytes=payload,
+                signature=signature_bytes,
+                public_key=settings.rule_signing_public_key,
+            )
+        )
+    except Exception as rejected:
+        # Loud and specific. A rejected bundle is either tampering or an operator mistake, and
+        # both need the reason rather than a stack trace.
+        typer.secho(f"Bundle rejected: {rejected}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from rejected
+
+    typer.secho(
+        f"Installed rule bundle version {installed.version} " f"({len(installed.rules)} rules).",
+        fg=typer.colors.GREEN,
+    )
 
 
 @app.command()

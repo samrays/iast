@@ -30,6 +30,7 @@ from .repositories import (
     SqlMfaCredentialRepository,
     SqlOrganizationRepository,
     SqlRoleRepository,
+    SqlRuleBundleRepository,
     SqlRuleSettingsRepository,
     SqlSessionRepository,
     SqlUserRepository,
@@ -74,6 +75,7 @@ class SqlUnitOfWork:
         self._mfa_credentials = SqlMfaCredentialRepository(self._session)
         self._sessions = SqlSessionRepository(self._session)
         self._api_key_lookup = SqlApiKeyLookup(self._session)
+        self._rule_bundles = SqlRuleBundleRepository(self._session)
         return self
 
     # --- global repositories --------------------------------------------------
@@ -207,6 +209,11 @@ class SqlUnitOfWork:
     def findings(self) -> SqlFindingRepository:
         self._require_tenant()
         return self._findings
+
+    @property
+    def rule_bundles(self) -> SqlRuleBundleRepository:
+        """Not tenant-scoped: the catalogue is published by the vendor."""
+        return self._rule_bundles
 
     @property
     def rule_settings(self) -> SqlRuleSettingsRepository:

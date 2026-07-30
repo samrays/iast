@@ -40,7 +40,7 @@ from ...domain.entities import (
     User,
 )
 from ...domain.entities.audit import GENESIS_HASH
-from ...domain.entities.rules import TenantRuleSettings
+from ...domain.entities.rules import RuleBundle, TenantRuleSettings
 from ...domain.value_objects import ApiKeyPrefix, EmailAddress, Slug, TokenHash
 from . import mappers as m
 from .models import (
@@ -57,6 +57,7 @@ from .models import (
     OccurrenceRecord,
     OrganizationRecord,
     RoleRecord,
+    RuleBundleRecord,
     SessionRecord,
     TenantRuleSettingsRecord,
     UserRecord,
@@ -1070,3 +1071,37 @@ class SqlRuleSettingsRepository(_TenantRepository):
             record.disabled = dict(settings.disabled)
         await self._session.flush()
         return m.rule_settings_to_domain(record)
+
+
+class SqlRuleBundleRepository(_Repository):
+    """Installed catalogue bundles. Global — the catalogue is the vendor's, not a tenant's."""
+
+    async def current(self) -> tuple[RuleBundle, int] | None:
+        """The highest installed version, or None when only the built-in catalogue applies."""
+        record = (
+            await self._session.execute(
+                select(RuleBundleRecord).order_by(RuleBundleRecord.version.desc()).limit(1)
+            )
+        ).scalar_one_or_none()
+        if record is None:
+            return None
+        # Parsed from the stored canonical bytes, not from columns: those bytes are what was
+        # signed, so anything derived from them inherits that guarantee.
+        return RuleBundle.from_canonical_bytes(record.canonical_bytes), record.version
+
+    async def installed_version(self) -> int | None:
+        return (
+            await self._session.execute(select(func.max(RuleBundleRecord.version)))
+        ).scalar_one_or_none()
+
+    async def install(self, bundle: RuleBundle, signature: bytes) -> None:
+        self._session.add(
+            RuleBundleRecord(
+                id=uuid4(),
+                version=bundle.version,
+                canonical_bytes=bundle.canonical_bytes(),
+                signature=signature,
+                published_at=bundle.published_at,
+            )
+        )
+        await self._session.flush()
