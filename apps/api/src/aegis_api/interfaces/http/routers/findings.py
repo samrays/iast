@@ -6,6 +6,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
+from fastapi.responses import JSONResponse
 
 from ....application.findings import (
     CommentOnFinding,
@@ -13,6 +14,7 @@ from ....application.findings import (
     ListFindings,
     TriageFinding,
 )
+from ....application.sarif import ExportFindingsAsSarif
 from ....domain.entities.findings import FindingStatus
 from ....domain.permissions import Permission
 from ..dependencies import ContainerDep, PrincipalDep, SettingsDep, requires
@@ -61,6 +63,33 @@ async def list_findings(
         search=search,
     )
     return PageResponse.of(page, [FindingResponse.of(item) for item in page.items])
+
+
+@router.get(
+    "/export/sarif",
+    summary="Export findings as SARIF 2.1.0 for code scanning",
+    response_model=None,
+)
+async def export_sarif(
+    principal: PrincipalDep,
+    container: ContainerDep,
+    settings: SettingsDep,
+    application_id: UUID | None = None,
+) -> JSONResponse:
+    """SARIF, so findings arrive in a pull request rather than waiting in a console.
+
+    Declared before ``/{finding_id}`` deliberately: FastAPI matches in declaration order, and
+    the other way round ``export`` would be parsed as a finding id and 422 on every call.
+    """
+    document = await ExportFindingsAsSarif(container.unit_of_work()).execute(
+        principal=principal,
+        application_id=application_id,
+        tool_version=settings.version,
+    )
+    return JSONResponse(
+        content=document,
+        headers={"Content-Disposition": 'attachment; filename="aegis-findings.sarif"'},
+    )
 
 
 @router.get(
