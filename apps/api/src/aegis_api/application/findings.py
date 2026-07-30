@@ -36,7 +36,7 @@ from ..domain.entities.findings import (
     stack_fingerprint,
 )
 from ..domain.entities.inventory import Criticality, EnvironmentKind
-from ..domain.errors import NotFoundError, ValidationError
+from ..domain.errors import DomainError, NotFoundError, ValidationError
 from ..domain.permissions import Permission
 from ..domain.ports import UnitOfWork
 from .audit_recorder import AuditRecorder
@@ -605,3 +605,115 @@ class ExpireAcceptedRisks:
                     expired += 1
             await uow.commit()
             return expired
+
+
+@dataclass(slots=True)
+class BulkTriageOutcome:
+    """What happened to one finding in a bulk request."""
+
+    finding_id: UUID
+    applied: bool
+    error: str = ""
+
+
+class BulkTriageFindings:
+    """Move many findings at once.
+
+    Partial success by design. A queue of fifty findings will always contain one somebody
+    already remediated, or one whose transition is illegal from where it currently sits, and a
+    bulk action that failed entirely because of it would be useless — the operator would be
+    left picking survivors out of an error message. Each finding is attempted independently
+    and reported on individually.
+
+    One transaction, though: a partial *write* is different from a partial *result*. If the
+    request dies halfway through, nothing should be left half-triaged.
+    """
+
+    #: Enough for a screenful of triage, bounded so one request cannot rewrite an entire
+    #: tenant's findings in a single transaction.
+    MAX_BATCH = 200
+
+    def __init__(self, uow: UnitOfWork) -> None:
+        self._uow = uow
+
+    async def execute(
+        self,
+        *,
+        principal: Principal,
+        finding_ids: list[UUID],
+        status: FindingStatus,
+        note: str = "",
+        accepted_for_days: int | None = None,
+    ) -> list[BulkTriageOutcome]:
+        principal.require(
+            Permission.FINDING_SUPPRESS if status.is_suppressed else Permission.FINDING_TRIAGE
+        )
+        if len(finding_ids) > self.MAX_BATCH:
+            raise ValidationError(
+                f"At most {self.MAX_BATCH} findings may be triaged at once.",
+                field="finding_ids",
+            )
+
+        now = datetime.now(UTC)
+        actor = principal.user_id or uuid4()
+        outcomes: list[BulkTriageOutcome] = []
+
+        async with self._uow as uow:
+            await uow.bind_tenant(principal.organization_id)
+            applied: list[str] = []
+
+            for finding_id in dict.fromkeys(finding_ids):
+                finding = await uow.findings.get(finding_id)
+                if finding is None:
+                    outcomes.append(
+                        BulkTriageOutcome(finding_id=finding_id, applied=False, error="not found")
+                    )
+                    continue
+                previous = finding.status
+                try:
+                    finding.transition(
+                        status,
+                        actor_id=actor,
+                        now=now,
+                        note=note,
+                        accepted_for=(
+                            timedelta(days=accepted_for_days) if accepted_for_days else None
+                        ),
+                    )
+                except DomainError as rejected:
+                    outcomes.append(
+                        BulkTriageOutcome(finding_id=finding_id, applied=False, error=str(rejected))
+                    )
+                    continue
+
+                await uow.findings.upsert(finding)
+                await uow.findings.add_comment(
+                    finding_id=finding.id,
+                    organization_id=principal.organization_id,
+                    author_id=principal.user_id,
+                    author_label=principal.label,
+                    body=note or f"Status changed to {status.value} in a bulk action.",
+                    status_from=previous.value,
+                    status_to=status.value,
+                )
+                applied.append(str(finding.id))
+                outcomes.append(BulkTriageOutcome(finding_id=finding_id, applied=True))
+
+            if applied:
+                # One audit entry for the batch, not one per finding. Fifty entries recording
+                # the same decision at the same instant by the same person is noise that makes
+                # the log harder to read, which is the opposite of what it is for.
+                await AuditRecorder(uow.audit).record(
+                    principal=principal,
+                    action=AuditAction.FINDING_TRIAGED.value,
+                    resource_type="finding",
+                    resource_id=f"bulk:{len(applied)}",
+                    metadata={
+                        "to": status.value,
+                        "applied": len(applied),
+                        "rejected": len(outcomes) - len(applied),
+                        "finding_ids": applied[:50],
+                    },
+                )
+            await uow.commit()
+        return outcomes

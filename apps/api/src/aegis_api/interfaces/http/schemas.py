@@ -689,3 +689,34 @@ class RuleToggleRequest(Schema):
     enabled: bool
     #: Required when switching a rule off; the domain rejects a blank one.
     reason: str = Field(default="", max_length=500)
+
+
+class BulkTriageRequest(Schema):
+    finding_ids: list[UUID] = Field(min_length=1, max_length=200)
+    status: Literal["OPEN", "CONFIRMED", "REMEDIATED", "FALSE_POSITIVE", "ACCEPTED_RISK"]
+    note: str = Field(default="", max_length=2000)
+    accepted_for_days: int | None = Field(default=None, ge=1, le=365)
+
+
+class BulkTriageOutcomeResponse(Schema):
+    finding_id: UUID
+    applied: bool
+    error: str
+
+
+class BulkTriageResponse(Schema):
+    applied: int
+    rejected: int
+    outcomes: list[BulkTriageOutcomeResponse]
+
+    @classmethod
+    def of(cls, outcomes: Any) -> BulkTriageResponse:
+        items = [
+            BulkTriageOutcomeResponse(finding_id=o.finding_id, applied=o.applied, error=o.error)
+            for o in outcomes
+        ]
+        return cls(
+            applied=sum(1 for o in items if o.applied),
+            rejected=sum(1 for o in items if not o.applied),
+            outcomes=items,
+        )

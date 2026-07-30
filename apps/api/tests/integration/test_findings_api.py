@@ -28,7 +28,13 @@ async def seed_finding(
     assert listed.status_code == 200, listed.text
     items = listed.json()["items"]
     assert items, "the pipeline produced no finding"
-    return items[0]
+    # The list is score-ordered, so items[0] is not necessarily the finding just seeded.
+    # Select by rule when the caller asked for a specific one, or this silently returns an
+    # earlier finding and any test seeding two of them compares one row with itself.
+    wanted = overrides.get("rule_key")
+    if wanted is None:
+        return items[0]
+    return next(item for item in items if item["rule_key"] == wanted)
 
 
 class TestQueue:
@@ -215,3 +221,134 @@ class TestIsolation:
         self, client: httpx.AsyncClient
     ) -> None:
         assert (await client.get("/api/v1/findings")).status_code == 401
+
+
+class TestBulkTriage:
+    async def test_moves_many_findings_in_one_request(
+        self, client: httpx.AsyncClient, container: Container, tenant: Tenant
+    ) -> None:
+        first = await seed_finding(client, container, tenant)
+        second = await seed_finding(client, container, tenant, rule_key="command-injection")
+
+        response = await client.post(
+            "/api/v1/findings/bulk-triage",
+            headers=tenant.headers,
+            json={
+                "finding_ids": [first["id"], second["id"]],
+                "status": "CONFIRMED",
+                "note": "Triaged in the sprint review.",
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["applied"] == 2
+        assert body["rejected"] == 0
+
+    async def test_one_illegal_transition_does_not_sink_the_batch(
+        self, client: httpx.AsyncClient, container: Container, tenant: Tenant
+    ) -> None:
+        movable = await seed_finding(client, container, tenant)
+        blocked = await seed_finding(client, container, tenant, rule_key="path-traversal")
+        # Remediated cannot go straight to false positive.
+        await client.patch(
+            f"/api/v1/findings/{blocked['id']}",
+            headers=tenant.headers,
+            json={"status": "REMEDIATED"},
+        )
+
+        response = await client.post(
+            "/api/v1/findings/bulk-triage",
+            headers=tenant.headers,
+            json={
+                "finding_ids": [movable["id"], blocked["id"]],
+                "status": "FALSE_POSITIVE",
+                "note": "Test fixtures, not real traffic.",
+            },
+        )
+        body = response.json()
+
+        # A bulk action that failed entirely because of one already-remediated finding would
+        # leave the operator picking survivors out of an error message.
+        assert body["applied"] == 1
+        assert body["rejected"] == 1
+        rejected = next(o for o in body["outcomes"] if not o["applied"])
+        assert rejected["finding_id"] == blocked["id"]
+        assert "cannot move" in rejected["error"]
+
+    async def test_an_unknown_id_is_reported_not_fatal(
+        self, client: httpx.AsyncClient, container: Container, tenant: Tenant
+    ) -> None:
+        known = await seed_finding(client, container, tenant)
+        missing = str(uuid4())
+
+        body = (
+            await client.post(
+                "/api/v1/findings/bulk-triage",
+                headers=tenant.headers,
+                json={
+                    "finding_ids": [known["id"], missing],
+                    "status": "CONFIRMED",
+                    "note": "",
+                },
+            )
+        ).json()
+        assert body["applied"] == 1
+        assert any(o["error"] == "not found" for o in body["outcomes"])
+
+    async def test_suppressing_in_bulk_still_requires_a_reason(
+        self, client: httpx.AsyncClient, container: Container, tenant: Tenant
+    ) -> None:
+        finding = await seed_finding(client, container, tenant)
+        body = (
+            await client.post(
+                "/api/v1/findings/bulk-triage",
+                headers=tenant.headers,
+                json={"finding_ids": [finding["id"]], "status": "ACCEPTED_RISK"},
+            )
+        ).json()
+        # Bulk is a convenience, not a way around the rule.
+        assert body["applied"] == 0
+        assert "reason" in body["outcomes"][0]["error"]
+
+    async def test_the_batch_is_one_audit_entry_not_fifty(
+        self, client: httpx.AsyncClient, container: Container, tenant: Tenant
+    ) -> None:
+        first = await seed_finding(client, container, tenant)
+        second = await seed_finding(client, container, tenant, rule_key="ssrf")
+
+        await client.post(
+            "/api/v1/findings/bulk-triage",
+            headers=tenant.headers,
+            json={
+                "finding_ids": [first["id"], second["id"]],
+                "status": "CONFIRMED",
+                "note": "Confirmed together.",
+            },
+        )
+        audit = await client.get(
+            "/api/v1/audit-events?action=finding.triaged", headers=tenant.headers
+        )
+        entries = audit.json()["items"]
+        # Identical entries recording one decision would make the log harder to read, which is
+        # the opposite of what it is for.
+        assert len(entries) == 1
+        assert entries[0]["metadata"]["applied"] == 2
+
+    async def test_another_tenants_findings_are_simply_not_found(
+        self,
+        client: httpx.AsyncClient,
+        container: Container,
+        tenant: Tenant,
+        other_tenant: Tenant,
+    ) -> None:
+        mine = await seed_finding(client, container, tenant)
+        body = (
+            await client.post(
+                "/api/v1/findings/bulk-triage",
+                headers=other_tenant.headers,
+                json={"finding_ids": [mine["id"]], "status": "CONFIRMED", "note": ""},
+            )
+        ).json()
+        # Not an error disclosing that the id exists elsewhere.
+        assert body["applied"] == 0
+        assert body["outcomes"][0]["error"] == "not found"

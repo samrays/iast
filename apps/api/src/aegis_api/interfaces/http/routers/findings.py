@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import JSONResponse
 
 from ....application.findings import (
+    BulkTriageFindings,
     CommentOnFinding,
     GetFinding,
     ListFindings,
@@ -20,6 +21,8 @@ from ....domain.entities.findings import FindingStatus
 from ....domain.permissions import Permission
 from ..dependencies import ContainerDep, PrincipalDep, SettingsDep, requires
 from ..schemas import (
+    BulkTriageRequest,
+    BulkTriageResponse,
     FindingCommentRequest,
     FindingCommentResponse,
     FindingDetailResponse,
@@ -114,6 +117,26 @@ async def export_siem(
     if isinstance(payload, str):
         return Response(content=payload, media_type=media_type)
     return JSONResponse(content=payload)
+
+
+@router.post(
+    "/bulk-triage",
+    response_model=BulkTriageResponse,
+    summary="Move many findings at once",
+)
+async def bulk_triage(
+    payload: BulkTriageRequest, principal: PrincipalDep, container: ContainerDep
+) -> BulkTriageResponse:
+    outcomes = await BulkTriageFindings(container.unit_of_work()).execute(
+        principal=principal,
+        finding_ids=payload.finding_ids,
+        status=FindingStatus(payload.status),
+        note=payload.note,
+        accepted_for_days=payload.accepted_for_days,
+    )
+    # 200 with per-finding outcomes rather than 207 or an error: the caller always needs the
+    # breakdown, and a status code cannot carry "forty applied, three were already remediated".
+    return BulkTriageResponse.of(outcomes)
 
 
 @router.get(
