@@ -318,3 +318,16 @@ export interface FindingDetail extends Finding {
   occurrences: Occurrence[];
   comments: FindingComment[];
 }
+
+// --- detection rules ---------------------------------------------------------------
+
+export interface DetectionRule {
+  key: string;
+  title: string;
+  severity: Severity;
+  cwe_id: number | null;
+  description: string;
+  remediation: string;
+  enabled: boolean;
+  disabled_reason: string;
+}

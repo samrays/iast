@@ -20,6 +20,7 @@ import type {
   ChainVerification,
   Criticality,
   CurrentPrincipal,
+  DetectionRule,
   EnvironmentKind,
   EnvironmentSummary,
   Finding,
@@ -492,6 +493,13 @@ export const api = {
         method: "POST",
         body: { body },
       }),
+  },
+
+  rules: {
+    list: () => request<DetectionRule[]>("/rules"),
+
+    setEnabled: (key: string, body: { enabled: boolean; reason?: string }) =>
+      request<DetectionRule>(`/rules/${key}`, { method: "PUT", body }),
   },
 
   audit: {

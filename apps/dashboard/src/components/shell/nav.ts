@@ -64,6 +64,14 @@ export const NAV_SECTIONS: NavSection[] = [
     title: "Govern",
     items: [
       {
+        href: "/rules",
+        label: "Detection rules",
+        icon: ShieldCheck,
+        requires: [Permission.POLICY_READ],
+        description:
+          "What the agent looks for, and what this organization has switched off",
+      },
+      {
         href: "/members",
         label: "Members",
         icon: Users,
