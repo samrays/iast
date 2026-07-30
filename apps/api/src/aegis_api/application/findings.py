@@ -106,6 +106,7 @@ class AgentContext:
     environment_kind: EnvironmentKind
     internet_facing: bool
     criticality: Criticality
+    protection_mode: str = "MONITOR"
 
     @property
     def exposure_weight(self) -> float:
@@ -232,6 +233,13 @@ class ProcessRuntimeEvents:
             confidence = _confidence(hit.get("confidence"))
             if _CONFIDENCE_ORDER[confidence] > _CONFIDENCE_ORDER[finding.confidence]:
                 finding.confidence = confidence
+
+        # No new wire field is needed for this. "A request blocking would have stopped" is
+        # exactly "an attack payload reached the sink", which the agent already reports as
+        # EXPLOITED confidence. Deriving it here rather than adding a flag keeps the agent
+        # ignorant of policy, which is where that decision belongs.
+        if finding.confidence is Confidence.EXPLOITED and context.protection_mode != "BLOCK":
+            finding.record_would_block()
 
         regressed = finding.record_occurrence(
             environment=context.environment_kind.value,

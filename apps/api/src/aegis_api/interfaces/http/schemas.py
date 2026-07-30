@@ -525,6 +525,7 @@ class FindingResponse(Schema):
     risk_factors: list[RiskFactorResponse]
     occurrence_count: int
     suppressed_occurrence_count: int
+    would_block_count: int
     environments_seen: list[str]
     route_templates: list[str]
     sink_signature: str
@@ -553,6 +554,7 @@ class FindingResponse(Schema):
             ],
             occurrence_count=finding.occurrence_count,
             suppressed_occurrence_count=finding.suppressed_occurrence_count,
+            would_block_count=finding.would_block_count,
             environments_seen=list(finding.environments_seen),
             route_templates=list(finding.route_templates),
             sink_signature=finding.sink_signature,

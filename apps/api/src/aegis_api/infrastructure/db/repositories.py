@@ -835,6 +835,7 @@ class SqlFindingRepository(_TenantRepository):
                 ApplicationEnvironmentRecord.kind,
                 ApplicationEnvironmentRecord.internet_facing,
                 ApplicationRecord.criticality,
+                ApplicationEnvironmentRecord.protection_mode,
             )
             # Explicit: without it SQLAlchemy infers the FROM from the selected columns and
             # leaves 'agents' dangling in a comma join.
@@ -860,6 +861,7 @@ class SqlFindingRepository(_TenantRepository):
             environment_kind=EnvironmentKind(row[1]),
             internet_facing=bool(row[2]),
             criticality=Criticality(row[3]),
+            protection_mode=str(row[4]),
         )
 
     async def get_by_identity(self, identity_hash: str) -> Finding | None:

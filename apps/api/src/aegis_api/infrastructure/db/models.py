@@ -446,6 +446,12 @@ class FindingRecord(Base, TimestampMixin):
     suppressed_occurrence_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
+    #: Exploitation attempts that blocking mode would have stopped. Kept apart from
+    #: occurrence_count because they answer different questions: how often is this flaw
+    #: reached, versus how often is it actually being attacked.
+    would_block_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     environments_seen: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
     )

@@ -267,6 +267,7 @@ class Finding:
     risk_factors: tuple[tuple[str, float, str], ...] = ()
     occurrence_count: int = 0
     suppressed_occurrence_count: int = 0
+    would_block_count: int = 0
     environments_seen: tuple[str, ...] = ()
     route_templates: tuple[str, ...] = ()
     first_seen_at: datetime | None = None
@@ -293,6 +294,17 @@ class Finding:
             raise InvalidStateError("A finding must have an identity hash.")
 
     # --- ingest ----------------------------------------------------------------------
+
+    def record_would_block(self) -> None:
+        """An exploitation attempt that blocking mode would have stopped.
+
+        This is what makes a monitor-mode soak decidable. Before anyone turns blocking on in
+        production they need to know its blast radius, and the only honest source for that is
+        how often the agent *would* have interrupted a real request. Counting it separately
+        from occurrences keeps the two questions apart: how often is this flaw reached, and
+        how often is it actually being attacked.
+        """
+        self.would_block_count += 1
 
     def record_occurrence(
         self, *, environment: str, route_template: str, observed_at: datetime

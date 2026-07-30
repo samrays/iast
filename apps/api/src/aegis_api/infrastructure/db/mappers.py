@@ -585,6 +585,7 @@ def finding_to_domain(record: FindingRecord) -> Finding:
         ),
         occurrence_count=record.occurrence_count,
         suppressed_occurrence_count=record.suppressed_occurrence_count,
+        would_block_count=record.would_block_count,
         environments_seen=tuple(record.environments_seen),
         route_templates=tuple(record.route_templates),
         first_seen_at=record.first_seen_at,
@@ -633,6 +634,7 @@ def apply_finding_to_record(entity: Finding, record: FindingRecord) -> None:
     ]
     record.occurrence_count = entity.occurrence_count
     record.suppressed_occurrence_count = entity.suppressed_occurrence_count
+    record.would_block_count = entity.would_block_count
     record.environments_seen = list(entity.environments_seen)
     record.route_templates = list(entity.route_templates)
     record.first_seen_at = entity.first_seen_at

@@ -328,6 +328,29 @@ class TestOccurrences:
         assert finding.suppressed_occurrence_count == 1
 
 
+class TestWouldBlock:
+    def test_counts_separately_from_occurrences(self) -> None:
+        finding = make_finding()
+        finding.record_occurrence(environment="PRODUCTION", route_template="/x", observed_at=NOW)
+        finding.record_would_block()
+
+        # Two different questions: how often is this flaw reached, and how often is it
+        # actually being attacked. Folding them together makes a soak undecidable.
+        assert finding.occurrence_count == 1
+        assert finding.would_block_count == 1
+
+    def test_accumulates_across_attempts(self) -> None:
+        finding = make_finding()
+        for _ in range(5):
+            finding.record_would_block()
+        # This is the number someone reads before enabling blocking in production: five real
+        # requests that would have been interrupted.
+        assert finding.would_block_count == 5
+
+    def test_starts_at_zero(self) -> None:
+        assert make_finding().would_block_count == 0
+
+
 class TestLifecycle:
     def test_rejects_an_illegal_transition(self) -> None:
         finding = make_finding(status=FindingStatus.REMEDIATED)
