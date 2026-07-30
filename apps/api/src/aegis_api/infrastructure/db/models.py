@@ -675,3 +675,22 @@ APPEND_ONLY_TABLES: tuple[str, ...] = (
     "finding_occurrences",
     "finding_comments",
 )
+
+
+class TenantRuleSettingsRecord(Base, TimestampMixin):
+    """Which rules one organization has switched off.
+
+    One row per tenant rather than one per disabled rule: the whole set is read on every
+    detection decision, and a single row keeps that a point lookup.
+    """
+
+    __tablename__ = "tenant_rule_settings"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    #: rule key -> the reason somebody gave for turning it off.
+    disabled: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )

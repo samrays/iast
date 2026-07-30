@@ -84,8 +84,8 @@ class RuleBundle:
     published_at: datetime
 
     def __post_init__(self) -> None:
-        if self.version < 1:
-            raise ValidationError("A bundle version must be positive.", field="version")
+        if self.version < 0:
+            raise ValidationError("A bundle version may not be negative.", field="version")
         keys = [rule.key for rule in self.rules]
         if len(keys) != len(set(keys)):
             # Two rules with one key means the second silently wins, and which one that is
@@ -204,3 +204,113 @@ class TenantRuleSettings:
 
     def effective_rules(self, bundle: RuleBundle) -> tuple[Rule, ...]:
         return tuple(rule for rule in bundle.rules if self.is_enabled(rule.key))
+
+
+#: The catalogue compiled into this build.
+#:
+#: Shipping a product whose detection is empty until an operator publishes a bundle would be a
+#: product that reports nothing on day one — and a clean report is the most dangerous output
+#: this system has. The built-in is the floor; signed bundles raise it.
+#:
+#: Version 0 deliberately: every published bundle is version >= 1, so the monotonic check in
+#: :func:`accept_bundle` admits the first real bundle without a special case.
+BUILTIN_BUNDLE_VERSION = 0
+
+
+def builtin_catalogue(published_at: datetime) -> RuleBundle:
+    """The rules this build knows about, independent of anything in the database."""
+    return RuleBundle(
+        version=BUILTIN_BUNDLE_VERSION,
+        published_at=published_at,
+        rules=tuple(
+            Rule(
+                key=key,
+                title=title,
+                severity=severity,
+                cwe_id=cwe,
+                description=description,
+            )
+            for key, title, severity, cwe, description in _BUILTIN_RULES
+        ),
+    )
+
+
+_BUILTIN_RULES: tuple[tuple[str, str, Severity, int, str], ...] = (
+    (
+        "sql-injection",
+        "SQL injection",
+        Severity.CRITICAL,
+        89,
+        "Untrusted input reaches a SQL statement without being bound as a parameter.",
+    ),
+    (
+        "command-injection",
+        "OS command injection",
+        Severity.CRITICAL,
+        78,
+        "Untrusted input reaches an operating-system command.",
+    ),
+    (
+        "unsafe-deserialization",
+        "Unsafe deserialization",
+        Severity.CRITICAL,
+        502,
+        "An attacker-controlled stream reaches a native deserializer.",
+    ),
+    (
+        "path-traversal",
+        "Path traversal",
+        Severity.HIGH,
+        22,
+        "Untrusted input reaches a filesystem path without being confined to a base directory.",
+    ),
+    (
+        "reflected-xss",
+        "Reflected cross-site scripting",
+        Severity.HIGH,
+        79,
+        "Untrusted input reaches the response body without contextual escaping.",
+    ),
+    (
+        "ssrf",
+        "Server-side request forgery",
+        Severity.HIGH,
+        918,
+        "Untrusted input decides the destination of an outbound request.",
+    ),
+    (
+        "ldap-injection",
+        "LDAP injection",
+        Severity.HIGH,
+        90,
+        "Untrusted input reaches an LDAP search filter.",
+    ),
+    (
+        "xpath-injection",
+        "XPath injection",
+        Severity.HIGH,
+        643,
+        "Untrusted input reaches an XPath expression.",
+    ),
+    (
+        "open-redirect",
+        "Open redirect",
+        Severity.MEDIUM,
+        601,
+        "Untrusted input decides a redirect destination.",
+    ),
+    (
+        "header-injection",
+        "HTTP header injection",
+        Severity.MEDIUM,
+        113,
+        "Untrusted input reaches a response header name or value.",
+    ),
+    (
+        "log-injection",
+        "Log injection",
+        Severity.MEDIUM,
+        117,
+        "Untrusted input reaches a log record without newline neutralization.",
+    ),
+)

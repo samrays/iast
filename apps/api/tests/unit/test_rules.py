@@ -15,11 +15,13 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from aegis_api.domain.entities.findings import Severity
 from aegis_api.domain.entities.rules import (
+    BUILTIN_BUNDLE_VERSION,
     BundleRejectedError,
     Rule,
     RuleBundle,
     TenantRuleSettings,
     accept_bundle,
+    builtin_catalogue,
 )
 from aegis_api.domain.errors import InvalidStateError, ValidationError
 
@@ -242,3 +244,46 @@ class TestTenantSettings:
         # At the ceiling, revising a reason must still work — it is not adding anything.
         settings.disable("rule-0", reason="revised")
         assert settings.disabled["rule-0"] == "revised"
+
+
+class TestBuiltinCatalogue:
+    def test_covers_every_rule_the_agent_can_report(self) -> None:
+        from aegis_api.application.findings import TITLE_BY_RULE
+
+        keys = {rule.key for rule in builtin_catalogue(NOW).rules}
+        # A rule the agent emits but the catalogue does not know would arrive as a finding
+        # nobody can describe, filter or switch off.
+        assert keys == set(TITLE_BY_RULE)
+
+    def test_agrees_with_the_worker_about_cwe_ids(self) -> None:
+        from aegis_api.application.findings import CWE_BY_RULE
+
+        for rule in builtin_catalogue(NOW).rules:
+            assert rule.cwe_id == CWE_BY_RULE[rule.key], rule.key
+
+    def test_is_version_zero_so_any_published_bundle_supersedes_it(self) -> None:
+        builtin = builtin_catalogue(NOW)
+        assert builtin.version == BUILTIN_BUNDLE_VERSION == 0
+        # The first real bundle must install without a special case in the monotonic check.
+        first = make_bundle(version=1)
+        assert (
+            accept_bundle(
+                candidate=first,
+                signature=sign(first),
+                verify=verifier(SIGNING_KEY),
+                installed_version=builtin.version,
+            )
+            is first
+        )
+
+    def test_every_rule_explains_itself(self) -> None:
+        # These strings are what a developer reads in a pull request comment, so an empty one
+        # is a finding with no explanation.
+        for rule in builtin_catalogue(NOW).rules:
+            assert rule.title
+            assert rule.description
+
+    def test_ships_detecting_rather_than_waiting_to_be_configured(self) -> None:
+        settings = TenantRuleSettings(organization_id=uuid4())
+        effective = settings.effective_rules(builtin_catalogue(NOW))
+        assert len(effective) == len(builtin_catalogue(NOW).rules)
