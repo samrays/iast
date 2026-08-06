@@ -60,6 +60,7 @@ DEFAULT_ENABLED_RULES = [
     "command-injection",
     "path-traversal",
     "unsafe-deserialization",
+    "xxe",
     "reflected-xss",
     "ssrf",
     "ldap-injection",

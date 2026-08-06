@@ -12,6 +12,7 @@ public enum RuleClass {
     COMMAND_INJECTION("command-injection", Severity.CRITICAL),
     PATH_TRAVERSAL("path-traversal", Severity.HIGH),
     UNSAFE_DESERIALIZATION("unsafe-deserialization", Severity.CRITICAL),
+    XXE("xxe", Severity.CRITICAL),
     REFLECTED_XSS("reflected-xss", Severity.HIGH),
     SSRF("ssrf", Severity.HIGH),
     LDAP_INJECTION("ldap-injection", Severity.HIGH),

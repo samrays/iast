@@ -56,11 +56,23 @@ def drive(crawler_xml: Path, base_url: str, timeout: float) -> int:
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
 
+    # Each test's URL in the crawler XML is already absolute, context path included
+    # (https://host:port/benchmark/sqli-00/BenchmarkTestNNNNN). base_url exists only to let the
+    # caller point at a different host/port than the one baked into the XML — it must replace
+    # the scheme+authority, never be concatenated with the test's own path, or every request
+    # doubles its context path (.../benchmark/benchmark/...) and 404s uniformly. A driver that
+    # only counts connection failures as "unreachable" would then report a clean run against a
+    # server that never once executed application code, which is exactly the failure mode that
+    # cost hours to diagnose here: routes still logged (Tomcat's 404 handler is a servlet too),
+    # every taint hit silently absent.
+    base = urllib.parse.urlsplit(base_url)
+
     failures = 0
+    not_found = 0
     for index, test in enumerate(tests, start=1):
         url = test.get("URL", "")
-        path = urllib.parse.urlsplit(url).path
-        target = base_url.rstrip("/") + path
+        test_url = urllib.parse.urlsplit(url)
+        target = urllib.parse.urlunsplit((base.scheme, base.netloc, test_url.path, "", ""))
 
         form = {c.get("name"): c.get("value") for c in test.findall("formparam")}
         query = {c.get("name"): c.get("value") for c in test.findall("getparam")}
@@ -81,8 +93,13 @@ def drive(crawler_xml: Path, base_url: str, timeout: float) -> int:
         try:
             with urllib.request.urlopen(request, timeout=timeout, context=context):
                 pass
-        except urllib.error.HTTPError:
-            # A test case that returns 500 still executed its sink, which is all we need.
+        except urllib.error.HTTPError as e:
+            # A test case that returns 500 still executed its sink, which is all we need. 404 is
+            # different: it means routing never found the servlet, so nothing downstream ran —
+            # tallied separately so a base_url/context-path mismatch is visible instead of
+            # silently producing a driven-clean, zero-findings run (see the note on base_url).
+            if e.code == 404:
+                not_found += 1
             pass
         except Exception:
             failures += 1
@@ -90,7 +107,14 @@ def drive(crawler_xml: Path, base_url: str, timeout: float) -> int:
         if index % 250 == 0:
             print(f"  {index}/{len(tests)} driven ({failures} unreachable)", flush=True)
 
-    print(f"driven {len(tests)} cases, {failures} unreachable")
+    print(f"driven {len(tests)} cases, {failures} unreachable, {not_found} returned 404")
+    if not_found > len(tests) // 5:
+        print(
+            f"WARNING: {not_found}/{len(tests)} requests 404'd. This usually means base_url is "
+            "wrong — pass just the scheme and host:port (e.g. https://localhost:8443), not the "
+            "context path; the crawler XML's URL already includes it.",
+            file=sys.stderr,
+        )
     return 0 if failures < len(tests) // 10 else 1
 
 

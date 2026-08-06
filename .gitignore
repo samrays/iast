@@ -54,6 +54,7 @@ Thumbs.db
 docker/volumes/
 *.log
 .aegis/
+.local-data/
 tools/
 
 # Third-party benchmark corpora and their run artefacts (see scripts/benchmark/).

@@ -258,6 +258,13 @@ _BUILTIN_RULES: tuple[tuple[str, str, Severity, int, str], ...] = (
         "An attacker-controlled stream reaches a native deserializer.",
     ),
     (
+        "xxe",
+        "XML External Entity (XXE) injection",
+        Severity.CRITICAL,
+        611,
+        "Untrusted XML reaches a parser without external entity or DTD processing disabled.",
+    ),
+    (
         "path-traversal",
         "Path traversal",
         Severity.HIGH,

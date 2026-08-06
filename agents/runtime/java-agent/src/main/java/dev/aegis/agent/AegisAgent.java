@@ -297,6 +297,19 @@ public final class AegisAgent {
                                                                                                 String
                                                                                                         .class)))));
 
+        // `new File(base, attackerName)` — File(File,String) and File(String,String). The
+        // overwhelmingly common shape for "join a fixed directory with user input", and the
+        // single-argument advice above never sees it: argument 0 there is the parent, not the
+        // child. See Advices.FileConstructWithParent.
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.named("java.io.File"),
+                        Advices.FileConstructWithParent.class,
+                        ElementMatchers.isConstructor()
+                                .and(ElementMatchers.takesArguments(2))
+                                .and(ElementMatchers.takesArgument(1, String.class)));
+
         builder =
                 advise(
                         builder,
@@ -333,6 +346,7 @@ public final class AegisAgent {
                         ElementMatchers.named("start"));
 
         builder = installHttpTransformers(builder);
+        builder = installRequestBodyTransformers(builder);
         builder = installAsyncTransformers(builder);
         builder = installSinkTransformers(builder);
         builder = installSanitizerTransformers(builder);
@@ -497,6 +511,20 @@ public final class AegisAgent {
                         // taking concat, substring and every other propagator down with it.
                         ElementMatchers.named("getBytes")
                                 .and(ElementMatchers.returns(byte[].class)));
+
+        // A serialized object almost never arrives as raw bytes; it arrives as a base64 string
+        // in a parameter, header or cookie. Without this the taint dies here, before it ever
+        // reaches ByteArrayInputStream or ObjectInputStream below — the getBytes() propagator
+        // above does not help, because the application called Base64.getDecoder().decode(...),
+        // not String.getBytes(). See Advices.Base64Decode.
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.named("java.util.Base64$Decoder"),
+                        Advices.Base64Decode.class,
+                        ElementMatchers.named("decode")
+                                .and(ElementMatchers.takesArguments(1))
+                                .and(ElementMatchers.returns(byte[].class)));
         builder =
                 advise(
                         builder,
@@ -513,11 +541,57 @@ public final class AegisAgent {
                                 .and(
                                         ElementMatchers.takesArgument(
                                                 0, java.io.InputStream.class)));
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.named("java.io.ObjectInputStream"),
+                        Advices.Deserialize.class,
+                        ElementMatchers.named("readObject").and(ElementMatchers.takesNoArguments()));
+        return installXxeTransformers(builder);
+    }
+
+    /**
+     * XML External Entity injection.
+     *
+     * <p>Two entry points cover the dominant real-world Java shapes: StAX, via
+     * {@code XMLInputFactory#createXMLStreamReader} — which also transparently covers Jackson's
+     * {@code XmlMapper}, built on exactly that call — and the classic DOM-based
+     * {@code DocumentBuilder#parse}. Neither type is named at compile time by class; both are
+     * abstract JDK types whose real instance is a vendor-internal subclass, the same problem
+     * {@code implementing()} already solves for {@code HttpServletResponse} and
+     * {@code DirContext} below.
+     *
+     * <p>The content usually does not arrive as a stream — {@code new StringReader(xml)} is the
+     * ordinary way to hand a string to a {@code Reader}-shaped API — so the propagator for it is
+     * registered here too, the same way {@code ByteArrayInputStream} is for deserialization.
+     */
+    private static AgentBuilder installXxeTransformers(AgentBuilder builder) {
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.named("java.io.StringReader"),
+                        Advices.DerivedFromArgument.class,
+                        ElementMatchers.isConstructor()
+                                .and(ElementMatchers.takesArgument(0, String.class)));
+
+        builder =
+                advise(
+                        builder,
+                        implementing("XMLInputFactory", "javax.xml.stream.XMLInputFactory"),
+                        Advices.XmlStreamRead.class,
+                        ElementMatchers.named("createXMLStreamReader")
+                                .and(
+                                        ElementMatchers.takesArgument(0, java.io.Reader.class)
+                                                .or(
+                                                        ElementMatchers.takesArgument(
+                                                                0, java.io.InputStream.class))));
+
         return advise(
                 builder,
-                ElementMatchers.named("java.io.ObjectInputStream"),
-                Advices.Deserialize.class,
-                ElementMatchers.named("readObject").and(ElementMatchers.takesNoArguments()));
+                implementing("DocumentBuilder", "javax.xml.parsers.DocumentBuilder"),
+                Advices.DocumentParse.class,
+                ElementMatchers.named("parse")
+                        .and(ElementMatchers.takesArgument(0, java.io.InputStream.class)));
     }
 
     /**
@@ -621,14 +695,17 @@ public final class AegisAgent {
                                                                         Advices.HttpStringSource
                                                                                 .class)
                                                                 .on(
+                                                                        // getRequestURI is
+                                                                        // deliberately absent —
+                                                                        // see the comment on
+                                                                        // AgentRuntime#sourceKindOf.
                                                                         ElementMatchers.namedOneOf(
                                                                                         "getParameter",
                                                                                         "getParameterValues",
                                                                                         "getHeader",
                                                                                         "getQueryString",
                                                                                         "getPathInfo",
-                                                                                        "getPathTranslated",
-                                                                                        "getRequestURI")
+                                                                                        "getPathTranslated")
                                                                                 .and(
                                                                                         ElementMatchers
                                                                                                 .isPublic())))
@@ -659,6 +736,53 @@ public final class AegisAgent {
                                                                                 ElementMatchers
                                                                                         .takesNoArguments()))));
         return builder;
+    }
+
+    /**
+     * Carries taint from the request body stream to whatever concretely reads it.
+     *
+     * <p>{@code getInputStream()}/{@code getReader()} above mark the stream object itself, at
+     * whatever moment the application asks for it — it has not been read yet, so the propagator
+     * chain from there is what actually turns that mark into a usable finding. Two idioms cover
+     * nearly every real one: a raw {@code InputStream.readAllBytes()} into a {@code new
+     * String(bytes, charset)}, and Spring's own {@code StreamUtils.copyToString}, which is what
+     * every {@code @RequestBody String} controller parameter goes through underneath.
+     */
+    private static AgentBuilder installRequestBodyTransformers(AgentBuilder builder) {
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.named("java.io.InputStream"),
+                        Advices.DerivedFromThis.class,
+                        ElementMatchers.named("readAllBytes").and(ElementMatchers.takesNoArguments()));
+
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.named("java.lang.String"),
+                        Advices.DerivedFromArgument.class,
+                        ElementMatchers.isConstructor()
+                                .and(ElementMatchers.takesArgument(0, byte[].class)));
+
+        // Spring's content-type sniffing (and plenty of other library code) peeks at the first
+        // bytes of the body stream by wrapping it in a PushbackInputStream before anything else
+        // reads it — confirmed live, not assumed: without this, the object StreamUtils actually
+        // reads is a *different* object from the one getInputStream() returned, and the taint
+        // mark never survives the wrap.
+        builder =
+                advise(
+                        builder,
+                        ElementMatchers.named("java.io.PushbackInputStream"),
+                        Advices.DerivedFromArgument.class,
+                        ElementMatchers.isConstructor()
+                                .and(ElementMatchers.takesArgument(0, java.io.InputStream.class)));
+
+        return advise(
+                builder,
+                ElementMatchers.named("org.springframework.util.StreamUtils"),
+                Advices.StreamToString.class,
+                ElementMatchers.named("copyToString")
+                        .and(ElementMatchers.takesArgument(0, java.io.InputStream.class)));
     }
 
     /**

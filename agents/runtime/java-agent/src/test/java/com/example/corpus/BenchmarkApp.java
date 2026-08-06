@@ -26,6 +26,10 @@ import java.util.Hashtable;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import javax.naming.directory.InitialDirContext;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.stream.XMLInputFactory;
+import javax.xml.stream.XMLStreamReader;
 import javax.xml.xpath.XPathFactory;
 import org.apache.commons.text.StringEscapeUtils;
 import org.eclipse.jetty.server.Server;
@@ -74,6 +78,16 @@ public final class BenchmarkApp {
     private static final String XPATH_PAYLOAD = "%27%20or%20%271%27%3D%271";
     /** A newline, so the forged line looks like its own log record. */
     private static final String LOG_PAYLOAD = "admin%0AWARN%20access%20granted";
+    /**
+     * Not percent-encoded, unlike every payload above: this one is sent as a raw POST body, not
+     * a query parameter, so it must not be URL-encoded — nothing on this path would decode it.
+     */
+    private static final String SQL_PAYLOAD_RAW = "' OR 1=1--";
+    /** A full document, not a single metacharacter — too irregular to hand-encode reliably. */
+    private static final String XXE_PAYLOAD =
+            URLEncoder.encode(
+                    "<!DOCTYPE x [<!ENTITY e SYSTEM \"file:///etc/passwd\">]><x>&e;</x>",
+                    StandardCharsets.UTF_8);
 
     /** Path → expected verdict, the rule that must fire, and the payload to send. */
     public static final Map<String, String[]> CASES = new LinkedHashMap<>();
@@ -95,10 +109,22 @@ public final class BenchmarkApp {
         // --- Path traversal ---------------------------------------------------------------
         register("/path/file", Expectation.VULNERABLE, "path-traversal", PATH_PAYLOAD);
         register("/path/constant", Expectation.SAFE, "", PATH_PAYLOAD);
+        // `new File(base, name)` — the two-argument constructor, not the concatenated single
+        // string above. This is the shape a real upload handler uses (WebGoat's among them),
+        // and it is a distinct code path in the agent: argument 0 there is the base directory,
+        // not the attacker's input, so the single-argument advice never sees it.
+        register("/path/file-child", Expectation.VULNERABLE, "path-traversal", PATH_PAYLOAD);
+        register("/path/file-child-constant", Expectation.SAFE, "", PATH_PAYLOAD);
 
         // --- Reflected XSS ----------------------------------------------------------------
         register("/xss/write", Expectation.VULNERABLE, "reflected-xss", XSS_PAYLOAD);
         register("/xss/escaped", Expectation.SAFE, "", XSS_PAYLOAD);
+        // getRequestURI() is not a taint source (see AgentRuntime#sourceKindOf): it returns the
+        // whole URI, context path included, and every framework reads it for reasons that have
+        // nothing to do with the current request's attacker-controlled parts — Thymeleaf
+        // resolving its own `@{...}` resource links being the one that produced a false
+        // positive on WebGoat's favicon and stylesheets, on every page, from the first request.
+        register("/xss/request-uri", Expectation.SAFE, "", XSS_PAYLOAD);
 
         // --- Open redirect ----------------------------------------------------------------
         register("/redirect/open", Expectation.VULNERABLE, "open-redirect", REDIRECT_PAYLOAD);
@@ -127,6 +153,40 @@ public final class BenchmarkApp {
         // --- Unsafe deserialization -------------------------------------------------------
         register("/deser/read", Expectation.VULNERABLE, "unsafe-deserialization", "payload");
         register("/deser/constant", Expectation.SAFE, "", "payload");
+        // Base64.getDecoder().decode(...) rather than String.getBytes() — the shape a real
+        // attacker uses, since a serialized object travels as a base64 parameter, header or
+        // cookie. A distinct propagator from the getBytes() case above; the payload here must
+        // decode as valid base64, or the corpus process itself would fail before the sink runs.
+        register(
+                "/deser/base64",
+                Expectation.VULNERABLE,
+                "unsafe-deserialization",
+                java.util.Base64.getEncoder()
+                        .encodeToString("payload".getBytes(StandardCharsets.UTF_8)));
+        register(
+                "/deser/base64-constant",
+                Expectation.SAFE,
+                "",
+                java.util.Base64.getEncoder()
+                        .encodeToString("payload".getBytes(StandardCharsets.UTF_8)));
+
+        // --- XML External Entity injection --------------------------------------------------
+        // Two entry points, matching the two sinks: the classic DOM-based DocumentBuilder, and
+        // StAX via XMLInputFactory — which is what WebGoat's own XXE lesson uses, and what
+        // Jackson's XmlMapper is built on, so this one also proves the Jackson path works
+        // without a Jackson-specific sink.
+        register("/xxe/documentbuilder", Expectation.VULNERABLE, "xxe", XXE_PAYLOAD);
+        register("/xxe/documentbuilder-constant", Expectation.SAFE, "", XXE_PAYLOAD);
+        register("/xxe/stax", Expectation.VULNERABLE, "xxe", XXE_PAYLOAD);
+        register("/xxe/stax-constant", Expectation.SAFE, "", XXE_PAYLOAD);
+
+        // --- Request body as a source -------------------------------------------------------
+        // getInputStream().readAllBytes() into new String(bytes, charset): the idiom that
+        // covers raw servlet code, distinct from Spring's StreamUtils.copyToString, which the
+        // corpus cannot exercise without adding spring-core as a test dependency — that path is
+        // verified live, against WebGoat's own bundled Spring, instead.
+        register("/body/sql", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD_RAW);
+        register("/body/sql-constant", Expectation.SAFE, "", SQL_PAYLOAD_RAW);
 
         // --- Cookie as a source -----------------------------------------------------------
         register("/cookie/sql", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
@@ -167,7 +227,9 @@ public final class BenchmarkApp {
                 String body =
                         path.startsWith("/cookie/")
                                 ? get(port, path, "name=" + payload)
-                                : get(port, path + "?name=" + payload, null);
+                                : path.startsWith("/body/")
+                                        ? post(port, path, payload)
+                                        : get(port, path + "?name=" + payload, null);
                 System.out.println(
                         "CASE " + entry.getKey() + " " + entry.getValue()[0] + " -> " + body);
             }
@@ -183,6 +245,19 @@ public final class BenchmarkApp {
             }
         }
         Thread.sleep(1_500);
+    }
+
+    /** For {@code /body/*} cases: the payload arrives as the raw request body, not a parameter. */
+    private static String post(int port, String path, String body) throws Exception {
+        HttpRequest request =
+                HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
+                        .POST(HttpRequest.BodyPublishers.ofString(body))
+                        .build();
+        HttpResponse<String> response =
+                HttpClient.newBuilder()
+                        .build()
+                        .send(request, HttpResponse.BodyHandlers.ofString());
+        return response.statusCode() + ":" + response.body().trim();
     }
 
     private static String get(int port, String path, String cookie) throws Exception {
@@ -234,6 +309,19 @@ public final class BenchmarkApp {
             }
         }
 
+        /** {@code /body/*} cases only: the payload is the raw request body, not a parameter. */
+        @Override
+        protected void doPost(HttpServletRequest request, HttpServletResponse response)
+                throws IOException {
+            String name = new String(request.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            PrintWriter out = response.getWriter();
+            try {
+                out.print(run(name, request, response));
+            } catch (Exception e) {
+                out.print("handled:" + e.getClass().getSimpleName());
+            }
+        }
+
         private String run(String name, HttpServletRequest request, HttpServletResponse response)
                 throws Exception {
             return switch (path) {
@@ -248,8 +336,11 @@ public final class BenchmarkApp {
                 case "/cmd/constant" -> commandConstant(name);
                 case "/path/file" -> fileWithInput(name);
                 case "/path/constant" -> fileConstant(name);
+                case "/path/file-child" -> fileWithChildInput(name);
+                case "/path/file-child-constant" -> fileWithChildConstant(name);
                 case "/xss/write" -> xssReflected(name, response);
                 case "/xss/escaped" -> xssEscaped(name, response);
+                case "/xss/request-uri" -> xssRequestUri(request, response);
                 case "/redirect/open" -> redirectOpen(name, response);
                 case "/redirect/encoded" -> redirectEncoded(name, response);
                 case "/header/set" -> headerFromInput(name, response);
@@ -264,6 +355,15 @@ public final class BenchmarkApp {
                 case "/log/constant" -> logConstant(name);
                 case "/deser/read" -> deserializeFromInput(name);
                 case "/deser/constant" -> deserializeConstant(name);
+                case "/deser/base64" -> deserializeFromBase64(name);
+                case "/deser/base64-constant" -> deserializeFromBase64Constant(name);
+                case "/xxe/documentbuilder" -> xxeDocumentBuilder(name);
+                case "/xxe/documentbuilder-constant" -> xxeDocumentBuilderConstant(name);
+                case "/xxe/stax" -> xxeStax(name);
+                case "/xxe/stax-constant" -> xxeStaxConstant(name);
+                // Same sink logic as /sql/plus and /sql/constant — only the source differs.
+                case "/body/sql" -> sqlPlus(name);
+                case "/body/sql-constant" -> sqlConstant(name);
                 case "/split/first" -> splitInjection(name);
                 case "/split/constant" -> splitConstant(name);
                 case "/cookie/sql" -> cookieInjection(request);
@@ -451,6 +551,16 @@ public final class BenchmarkApp {
                     + name.length();
         }
 
+        private String fileWithChildInput(String name) {
+            java.io.File base = new java.io.File("corpus-data");
+            return "exists:" + new java.io.File(base, name).exists();
+        }
+
+        private String fileWithChildConstant(String name) {
+            java.io.File base = new java.io.File("corpus-data");
+            return "exists:" + new java.io.File(base, "fixed.txt").exists() + ":" + name.length();
+        }
+
         // --- reflected XSS ------------------------------------------------------------
 
         private String xssReflected(String name, HttpServletResponse response) throws IOException {
@@ -461,6 +571,17 @@ public final class BenchmarkApp {
         /** The same page, escaped. The escaper clears XSS and nothing else. */
         private String xssEscaped(String name, HttpServletResponse response) throws IOException {
             response.getWriter().print("<p>" + StringEscapeUtils.escapeHtml4(name) + "</p>");
+            return "";
+        }
+
+        /**
+         * Unescaped, unsanitised, and still expected to produce nothing: this is what Thymeleaf
+         * does internally to resolve its own template-declared resource links, and it must not
+         * read as reflected XSS just because the value nominally came off the request.
+         */
+        private String xssRequestUri(HttpServletRequest request, HttpServletResponse response)
+                throws IOException {
+            response.getWriter().print("<link href='" + request.getRequestURI() + "'>");
             return "";
         }
 
@@ -595,6 +716,78 @@ public final class BenchmarkApp {
             byte[] fixed = "fixed-payload".getBytes(StandardCharsets.UTF_8);
             try (ObjectInputStream in = new ObjectInputStream(new ByteArrayInputStream(fixed))) {
                 return "read:" + in.readObject();
+            } catch (Exception e) {
+                return "handled:" + e.getClass().getSimpleName() + ":" + name.length();
+            }
+        }
+
+        private String deserializeFromBase64(String name) {
+            byte[] payload = java.util.Base64.getDecoder().decode(name);
+            try (ObjectInputStream in = new ObjectInputStream(new ByteArrayInputStream(payload))) {
+                return "read:" + in.readObject();
+            } catch (Exception e) {
+                return "handled:" + e.getClass().getSimpleName();
+            }
+        }
+
+        private String deserializeFromBase64Constant(String name) {
+            byte[] fixed =
+                    java.util.Base64.getDecoder()
+                            .decode(
+                                    java.util.Base64.getEncoder()
+                                            .encodeToString(
+                                                    "fixed-payload"
+                                                            .getBytes(StandardCharsets.UTF_8)));
+            try (ObjectInputStream in = new ObjectInputStream(new ByteArrayInputStream(fixed))) {
+                return "read:" + in.readObject();
+            } catch (Exception e) {
+                return "handled:" + e.getClass().getSimpleName() + ":" + name.length();
+            }
+        }
+
+        // --- XML External Entity injection ---------------------------------------------
+
+        private String xxeDocumentBuilder(String name) {
+            try {
+                DocumentBuilder builder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
+                var document =
+                        builder.parse(new ByteArrayInputStream(name.getBytes(StandardCharsets.UTF_8)));
+                return "root:" + document.getDocumentElement().getNodeName();
+            } catch (Exception e) {
+                return "handled:" + e.getClass().getSimpleName();
+            }
+        }
+
+        private String xxeDocumentBuilderConstant(String name) {
+            try {
+                DocumentBuilder builder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
+                var document =
+                        builder.parse(
+                                new ByteArrayInputStream("<x/>".getBytes(StandardCharsets.UTF_8)));
+                return "root:" + document.getDocumentElement().getNodeName() + ":" + name.length();
+            } catch (Exception e) {
+                return "handled:" + e.getClass().getSimpleName() + ":" + name.length();
+            }
+        }
+
+        private String xxeStax(String name) {
+            try {
+                XMLStreamReader reader =
+                        XMLInputFactory.newInstance().createXMLStreamReader(new StringReader(name));
+                int event = reader.next();
+                return "event:" + event;
+            } catch (Exception e) {
+                return "handled:" + e.getClass().getSimpleName();
+            }
+        }
+
+        private String xxeStaxConstant(String name) {
+            try {
+                XMLStreamReader reader =
+                        XMLInputFactory.newInstance()
+                                .createXMLStreamReader(new StringReader("<x/>"));
+                int event = reader.next();
+                return "event:" + event + ":" + name.length();
             } catch (Exception e) {
                 return "handled:" + e.getClass().getSimpleName() + ":" + name.length();
             }

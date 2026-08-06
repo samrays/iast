@@ -75,13 +75,17 @@ public final class Advices {
         }
     }
 
-    /** {@code ServletRequest.getInputStream/getReader} — a blind spot, reported as one. */
+    /**
+     * {@code ServletRequest.getInputStream/getReader} — marks the returned stream itself, so a
+     * propagator downstream can carry the mark to whatever it derives. See
+     * {@link dev.aegis.agent.AgentRuntime#onRequestBodySource}.
+     */
     public static final class RequestBodyAccess {
         private RequestBodyAccess() {}
 
         @Advice.OnMethodExit(suppress = Throwable.class)
-        public static void exit(@Advice.Origin("#m") String accessor) {
-            AgentRuntime.onRequestBodyAccess(accessor);
+        public static void exit(@Advice.Return Object stream) {
+            AgentRuntime.onRequestBodySource(stream);
         }
     }
 
@@ -308,6 +312,30 @@ public final class Advices {
         }
     }
 
+    /**
+     * {@code File(File parent, String child)} and {@code File(String parent, String child)}.
+     *
+     * <p>{@code new File(uploadDirectory, attackerName)} is the ordinary way Java code builds a
+     * path from a fixed base plus user input — it is what WebGoat's own upload lesson does, and
+     * the single-argument {@link FileAccess} advice above never sees it: argument 0 there is the
+     * {@code File} parent, not the attacker-controlled child. Both arguments are checked rather
+     * than assuming which one is untrusted; {@link AgentRuntime#onSink} already no-ops on a
+     * non-{@code String} argument, so calling it on the parent when the parent is a {@code File}
+     * costs one wasted instanceof check, not a false positive.
+     */
+    public static final class FileConstructWithParent {
+        private FileConstructWithParent() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(
+                @Advice.Argument(0) Object parent, @Advice.Argument(1) Object child) {
+            AgentRuntime.onSink(
+                    parent, RuleClass.PATH_TRAVERSAL, "java.io.File#<init>(.., String)");
+            AgentRuntime.onSink(
+                    child, RuleClass.PATH_TRAVERSAL, "java.io.File#<init>(.., String)");
+        }
+    }
+
     /** {@code DirContext.search(name, filter, ...)} — the filter is the injection point. */
     public static final class LdapSearch {
         private LdapSearch() {}
@@ -422,6 +450,40 @@ public final class Advices {
         }
     }
 
+    /**
+     * {@code XMLInputFactory#createXMLStreamReader(Reader|InputStream)} — the StAX entry point.
+     *
+     * <p>Not just the raw JDK API: Jackson's {@code XmlMapper} builds its parser on top of
+     * exactly this call, so instrumenting it here also covers every application that reads XML
+     * through Jackson without adding a Jackson-specific hook. {@code XMLInputFactory.newInstance()}
+     * has DTD and external-entity support on by default, and disabling them is opt-in — matching
+     * the unsafe-deserialization sink two entries up, this fires on the dataflow and does not
+     * try to detect whether that opt-in happened, the same way {@code readObject} does not try
+     * to detect an installed {@code ObjectInputFilter}.
+     */
+    public static final class XmlStreamRead {
+        private XmlStreamRead() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(@Advice.Argument(0) Object source) {
+            AgentRuntime.onObjectSink(
+                    source,
+                    RuleClass.XXE,
+                    "javax.xml.stream.XMLInputFactory#createXMLStreamReader");
+        }
+    }
+
+    /** {@code DocumentBuilder#parse(InputStream)} — the classic DOM-based XXE shape. */
+    public static final class DocumentParse {
+        private DocumentParse() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static void enter(@Advice.Argument(0) Object source) {
+            AgentRuntime.onObjectSink(
+                    source, RuleClass.XXE, "javax.xml.parsers.DocumentBuilder#parse");
+        }
+    }
+
     // --- response body, for reflected XSS ---------------------------------------------------
 
     /** {@code ServletResponse.getWriter()/getOutputStream()} — remember the body channel. */
@@ -509,6 +571,44 @@ public final class Advices {
 
         @Advice.OnMethodExit(suppress = Throwable.class)
         public static void exit(@Advice.This Object derived, @Advice.Argument(0) Object source) {
+            AgentRuntime.onDerivedObject(derived, source);
+        }
+    }
+
+    /**
+     * {@code Base64.Decoder#decode(String)} / {@code decode(byte[])}.
+     *
+     * <p>An attacker-controlled payload almost never arrives as raw bytes — it arrives as a
+     * base64 string in a parameter, header or cookie, and the application decodes it before
+     * doing anything dangerous with it. {@code Base64.getDecoder()} returns a shared singleton,
+     * so unlike {@link DerivedFromThis} the derived value cannot be read off {@code this}; it
+     * has to be read off the return value instead, carrying taint from argument to result the
+     * way {@code Reshaping} does for {@code URLDecoder}. Without this the taint dies at the
+     * decode call and every downstream sink — deserialization above all — sees clean bytes.
+     */
+    public static final class Base64Decode {
+        private Base64Decode() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.Argument(0) Object source, @Advice.Return Object derived) {
+            AgentRuntime.onDerivedObject(derived, source);
+        }
+    }
+
+    /**
+     * Whole-body-to-string utilities: {@code StreamUtils.copyToString}, the call Spring's own
+     * {@code StringHttpMessageConverter} makes to satisfy a {@code @RequestBody String}
+     * parameter — confirmed by decompiling the bundled {@code spring-web} jar, not assumed.
+     * Without this a POST body never becomes tainted at all: Spring reads it entirely inside
+     * framework code, past every accessor-based source above.
+     */
+    public static final class StreamToString {
+        private StreamToString() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.Argument(0) Object source, @Advice.Return Object derived) {
             AgentRuntime.onDerivedObject(derived, source);
         }
     }

@@ -226,17 +226,16 @@ public final class AgentRuntime {
             boolean sampled =
                     runtime.governor.shouldSample(java.util.concurrent.ThreadLocalRandom.current());
             RequestContext context = RequestContext.begin(newTraceId(), sampled);
+            // `context.path()` — the raw request URI — is recorded as evidence (the request
+            // line a finding's occurrence is attached to) but deliberately not tracked as taint
+            // here. It used to be, on the theory that it "reaches path and redirect sinks", but
+            // the URI includes the context path — fixed at deploy time, identical on every
+            // request — and every framework reads it for structural reasons that have nothing
+            // to do with the current request's attacker-controlled parts. Thymeleaf resolving
+            // its own `@{...}` resource links did exactly that and produced a reflected-xss
+            // finding on WebGoat's own favicon and stylesheets, on every page, from the first
+            // request. See AgentRuntime#sourceKindOf for the matching fix on the accessor side.
             dev.aegis.agent.runtime.HttpFacade.describe(request, context);
-
-            // The request URI is attacker-controlled and reaches path and redirect sinks, so it
-            // is a source in its own right — not merely evidence.
-            if (sampled && !context.path().isEmpty()) {
-                context.tracker()
-                        .trackSource(
-                                context.path(),
-                                dev.aegis.agent.taint.SourceKind.PATH,
-                                "request-uri");
-            }
             return true;
         } catch (Throwable t) {
             runtime.hookFailed(t);
@@ -353,8 +352,19 @@ public final class AgentRuntime {
                     dev.aegis.agent.taint.SourceKind.PARAMETER;
             case "getHeader" -> dev.aegis.agent.taint.SourceKind.HEADER;
             case "getQueryString" -> dev.aegis.agent.taint.SourceKind.QUERY_STRING;
-            case "getPathInfo", "getRequestURI", "getPathTranslated" ->
-                    dev.aegis.agent.taint.SourceKind.PATH;
+            // getPathInfo/getPathTranslated: the extra path segment past the servlet mapping,
+            // the classic path-traversal source (`new File(base, request.getPathInfo())`).
+            //
+            // getRequestURI deliberately excluded, and not merely renamed into this group: it
+            // returns the *whole* URI, context path included, and every web framework reads it
+            // for entirely mundane, non-attacker-facing reasons — resolving a template's own
+            // `@{...}` resource links being the one that actually happened here. Real requests
+            // to a real deployment differ from each other in query string, headers, parameters
+            // and the trailing path segments a route captures — never in the context path,
+            // which is fixed at deploy time. Treating it as untrusted taints server config, not
+            // attacker input, and the result was a reflected-xss finding firing on WebGoat's
+            // own favicon and stylesheet links, on every single page, from the first request.
+            case "getPathInfo", "getPathTranslated" -> dev.aegis.agent.taint.SourceKind.PATH;
             default -> null;
         };
     }
@@ -387,28 +397,51 @@ public final class AgentRuntime {
     }
 
     /**
-     * The application read the request body as a stream.
+     * The application read the request body as a stream: {@code getInputStream()} or
+     * {@code getReader()}.
      *
-     * <p>The agent does not follow taint through the body: doing so means wrapping the
-     * container's stream, and a bug in that wrapper corrupts uploads in production. Rather
-     * than pretend the blind spot does not exist, it is reported — an application with poor
-     * instrumentation coverage and no findings must read as <em>unknown</em>, never as
-     * <em>secure</em> (ADR-0007).
+     * <p>This does not wrap the container's stream — that risk (a bug in the wrapper corrupting
+     * a real upload in production) is exactly why this was a declared blind spot before. What
+     * changed is narrower: the stream <em>object itself</em> is marked in the same
+     * identity-keyed side table every other object-sourced value already uses (see
+     * {@link #onDerivedObject}), never touching the bytes flowing through it. A propagator that
+     * later derives a concrete value from this exact object — {@code readAllBytes()},
+     * {@code new String(bytes, charset)}, Spring's {@code StreamUtils.copyToString} — carries
+     * the mark forward the same way {@code ByteArrayInputStream(byte[])} already does for
+     * deserialization. One more link turned out to matter in practice, confirmed by tracing a
+     * real request rather than assumed: Spring wraps the stream in a {@code PushbackInputStream}
+     * before reading it (content-type sniffing peeks at the first bytes), which is a *different*
+     * object from the one this method marks — so that constructor needs its own propagator too,
+     * or the mark never reaches {@code copyToString} at all.
+     *
+     * <p>The one honest cost: at this point the real content length is not yet known — nothing
+     * has read the stream yet. The mark uses a placeholder length of 1, which is sufficient for
+     * every existing dangerousness check (an overlap test against {@code [0, realLength)}), and
+     * is recorded {@link TaintedValue#isImprecise() imprecise} so a finding's evidence does not
+     * claim character-level precision it does not have. Reading the body through anything not
+     * explicitly propagated — a hand-rolled byte-at-a-time loop, an unrecognised library — is
+     * still a blind spot, the same way it always was; this closes the two idioms that account
+     * for nearly every real one (a raw {@code readAllBytes()} and Spring's own converter).
      */
-    public static void onRequestBodyAccess(String accessor) {
+    public static void onRequestBodySource(Object stream) {
         AgentRuntime runtime = instance;
         ThreadState state = ThreadState.current();
-        if (runtime == null || !state.enter()) {
+        if (runtime == null || stream == null || !state.enter()) {
             return;
         }
         try {
-            RequestContext context = state.context();
-            if (context == null) {
+            if (!runtime.governor.level().allowsDataflow()) {
                 return;
             }
-            runtime.reporter.reportCoverageGap(
-                    "request body read via " + accessor + "; taint not tracked through the stream",
-                    "servlet-request-body");
+            RequestContext context = state.context();
+            if (context == null || !context.isSampled()) {
+                return;
+            }
+            dev.aegis.agent.taint.TaintedValue taint =
+                    dev.aegis.agent.taint.TaintedValue.fullyTainted(
+                                    1, dev.aegis.agent.taint.SourceKind.BODY, "request-body")
+                            .reshaped(1);
+            context.tracker().track(stream, taint);
         } catch (Throwable t) {
             runtime.hookFailed(t);
         } finally {

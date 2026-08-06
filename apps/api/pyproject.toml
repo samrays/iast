@@ -48,6 +48,13 @@ aegis-api = "aegis_api.cli:app"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# PEP 561: without this, a downstream package installing aegis-api (aegis-worker does)
+# gets treated by mypy as an untyped third-party dependency, and every import from it as
+# `Any` — silently discarding every type this package declares at the one boundary that
+# matters most, since that is exactly where a mismatch would otherwise go unnoticed.
+aegis_api = ["py.typed"]
+
 [tool.black]
 line-length = 100
 target-version = ["py311"]
