@@ -109,9 +109,10 @@ Notes from implementation worth carrying forward:
 - ✅ Bootstrap (`premain`), Byte Buddy transformer, bootstrap helper injection with a re-entrancy
   guard — the agent instruments `StringBuilder`, which it also uses itself.
 - ✅ Range-based taint engine with per-rule-class sanitizer awareness (ADR-0007), propagating through
-  `String`, `StringBuilder`/`StringBuffer` append, replace and reverse, `String.split`, Base64 and
-  **`invokedynamic` string concatenation** — since Java 9 the `+` operator compiles to a
-  `StringConcatFactory` call site, which is how most Java injection is written.
+  `String`, `StringBuilder`/`StringBuffer` append, replace and reverse, `String.split`,
+  `String.format`/`formatted`, Base64 and **`invokedynamic` string concatenation** — since Java 9 the
+  `+` operator compiles to a `StringConcatFactory` call site, which is how most Java injection is
+  written.
 - ✅ HTTP entry point and sources for both servlet API generations: `getParameter`,
   `getParameterValues`, `getHeader`, `getHeaders`, `getHeaderNames`, `getQueryString`, `getPathInfo`,
   request-body streams/readers and `Cookie.getValue`. Spring's matched route pattern is read from the
@@ -124,8 +125,8 @@ Notes from implementation worth carrying forward:
   finding deduplication.
 - ✅ Durable offline spool, retry backoff, TLS with SPKI certificate pinning.
 - ✅ `apps/gateway`: agent auth, schema validation, per-tenant quota, dedup, Kafka/file/memory sinks.
-- ✅ **Detection gate in CI:** a 50-case paired vulnerable/safe corpus modelled on the OWASP Benchmark
-  categories — **25/25 recall, 0/25 false positives**, no duplicate findings, and every declared rule
+- ✅ **Detection gate in CI:** a 54-case paired vulnerable/safe corpus modelled on the OWASP Benchmark
+  categories — **27/27 recall, 0/27 false positives**, no duplicate findings, and every declared rule
   class proven reachable. Enforced by `CorpusIT`.
 - ✅ **Overhead gate in CI:** the same workload measured with and without the agent, enforced by
   `OverheadIT`. Measured cost is ~30–60µs added per request depending on machine load.

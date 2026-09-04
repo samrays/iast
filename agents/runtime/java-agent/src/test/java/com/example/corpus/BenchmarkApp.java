@@ -100,8 +100,12 @@ public final class BenchmarkApp {
         register("/sql/substring", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
         register("/sql/builder-replace", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
         register("/sql/builder-reverse", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
+        register("/sql/format", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
+        register("/sql/formatted", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
         register("/sql/builder-replace-clears", Expectation.SAFE, "", SQL_PAYLOAD);
         register("/sql/builder-reverse-constant", Expectation.SAFE, "", SQL_PAYLOAD);
+        register("/sql/format-constant", Expectation.SAFE, "", SQL_PAYLOAD);
+        register("/sql/formatted-constant", Expectation.SAFE, "", SQL_PAYLOAD);
         register("/sql/prepared", Expectation.SAFE, "", SQL_PAYLOAD);
         register("/sql/constant", Expectation.SAFE, "", SQL_PAYLOAD);
         register("/sql/identity", Expectation.SAFE, "", "alice");
@@ -358,8 +362,12 @@ public final class BenchmarkApp {
                 case "/sql/substring" -> sqlSubstring(name);
                 case "/sql/builder-replace" -> sqlBuilderReplace(name);
                 case "/sql/builder-reverse" -> sqlBuilderReverse(name);
+                case "/sql/format" -> sqlFormat(name);
+                case "/sql/formatted" -> sqlFormatted(name);
                 case "/sql/builder-replace-clears" -> sqlBuilderReplaceClears(name);
                 case "/sql/builder-reverse-constant" -> sqlBuilderReverseConstant(name);
+                case "/sql/format-constant" -> sqlFormatConstant(name);
+                case "/sql/formatted-constant" -> sqlFormattedConstant(name);
                 case "/sql/prepared" -> sqlPrepared(name);
                 case "/sql/constant" -> sqlConstant(name);
                 case "/sql/identity" -> sqlIdentity(name);
@@ -455,6 +463,14 @@ public final class BenchmarkApp {
             return query(sql.toString());
         }
 
+        private String sqlFormat(String name) throws Exception {
+            return query(String.format("SELECT name FROM users WHERE name = '%s'", name));
+        }
+
+        private String sqlFormatted(String name) throws Exception {
+            return query("SELECT name FROM users WHERE name = '%s'".formatted(name));
+        }
+
         /** Removing the only tainted range must remove the builder's side-table entry too. */
         private String sqlBuilderReplaceClears(String name) throws Exception {
             String prefix = "SELECT name FROM users WHERE name = '";
@@ -466,6 +482,18 @@ public final class BenchmarkApp {
         private String sqlBuilderReverseConstant(String name) throws Exception {
             StringBuilder value = new StringBuilder("alice").reverse().reverse();
             return query("SELECT name FROM users WHERE name = '" + value + "'")
+                    + ":"
+                    + name.length();
+        }
+
+        private String sqlFormatConstant(String name) throws Exception {
+            return query(String.format("SELECT name FROM users WHERE name = '%s'", "alice"))
+                    + ":"
+                    + name.length();
+        }
+
+        private String sqlFormattedConstant(String name) throws Exception {
+            return query("SELECT name FROM users WHERE name = '%s'".formatted("alice"))
                     + ":"
                     + name.length();
         }

@@ -33,11 +33,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ### Added — Phase 4 recall work
 
 - Java-agent taint now survives `StringBuilder.replace()` and `reverse()` with exact range
+  transforms, plus `String.format()` and `String.formatted()` as conservative whole-value
   transforms; replacing the last tainted span with a constant also removes the stale side-table
   entry instead of producing a false positive later.
 - `HttpServletRequest.getHeaderNames()` is now a source whose lazy enumeration is wrapped without
   consuming it. The packaged-agent corpus covers the new source and both mutable-string transforms
-  with paired vulnerable and safe cases: **25/25 recall and 0/25 false positives**.
+  with paired vulnerable and safe cases: **27/27 recall and 0/27 false positives**.
 
 ### Added — Phase 4 (in progress): Java runtime agent
 

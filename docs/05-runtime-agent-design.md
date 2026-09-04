@@ -217,8 +217,9 @@ this breakdown rather than mixing counts from different executions.
 | 7 | `StringBuilder.replace`/`reverse` | ~40 | implemented; rerun pending |
 | 8 | `String.split` | ~25 | implemented; rerun pending |
 | 9 | `getHeaderNames()` | ~14 | implemented; rerun pending |
+| 10 | `String.format` / `String.formatted` | uncounted | implemented; rerun pending |
 
-**Groups 2, 7, 8 and 9 are implemented and covered by the packaged-agent corpus.** Group 3 remains
+**Groups 2, 7, 8, 9 and 10 are implemented and covered by the packaged-agent corpus.** Group 3 remains
 implementable work of the same shape as the `URLDecoder` propagator, but its ESAPI semantics need a
 paired safe control before adding it: an encoder used as a sanitizer must not be reclassified as a
 pass-through merely to raise recall.

@@ -166,6 +166,31 @@ public final class Advices {
         }
     }
 
+    /** Static {@code String.format} overloads. */
+    public static final class StaticStringFormat {
+        private StaticStringFormat() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.AllArguments Object[] invocationArguments,
+                @Advice.Return String result) {
+            AgentRuntime.onStaticStringFormat(result, invocationArguments);
+        }
+    }
+
+    /** Instance {@code String.formatted(Object...)}. */
+    public static final class FormattedString {
+        private FormattedString() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.This Object format,
+                @Advice.Argument(0) Object[] arguments,
+                @Advice.Return String result) {
+            AgentRuntime.onStringFormat(result, format, arguments);
+        }
+    }
+
     /**
      * {@code StringConcatFactory.makeConcatWithConstants(...)} — the bootstrap for {@code +}.
      *

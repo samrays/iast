@@ -192,7 +192,31 @@ public final class AegisAgent {
                                                                                 "toUpperCase",
                                                                                 "trim",
                                                                                 "strip",
-                                                                                "intern"))));
+                                                                                "intern")))
+                                                .visit(
+                                                        net.bytebuddy.asm.Advice.to(
+                                                                        Advices.StaticStringFormat
+                                                                                .class)
+                                                                .on(
+                                                                        ElementMatchers.named("format")
+                                                                                .and(
+                                                                                        ElementMatchers
+                                                                                                .isStatic())
+                                                                                .and(
+                                                                                        ElementMatchers
+                                                                                                .returns(
+                                                                                                        String.class))))
+                                                .visit(
+                                                        net.bytebuddy.asm.Advice.to(
+                                                                        Advices.FormattedString.class)
+                                                                .on(
+                                                                        ElementMatchers.named(
+                                                                                        "formatted")
+                                                                                .and(
+                                                                                        ElementMatchers
+                                                                                                .takesArguments(
+                                                                                                        Object[]
+                                                                                                                .class)))));
 
         builder =
                 builder.type(

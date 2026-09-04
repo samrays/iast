@@ -843,6 +843,67 @@ public final class AgentRuntime {
     }
 
     /**
+     * {@code String.format(...)} and {@code String.formatted(...)} reshape tainted arguments
+     * into one result whose exact offsets depend on the format directives.
+     */
+    public static void onStringFormat(String result, Object format, Object[] arguments) {
+        AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
+        if (runtime == null || result == null || result.isEmpty() || !state.enter()) {
+            return;
+        }
+        try {
+            if (!runtime.governor.level().allowsDataflow()) {
+                return;
+            }
+            RequestContext context = state.context();
+            if (context == null || !context.isSampled()) {
+                return;
+            }
+            TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
+
+            TaintedValue combined = tracker.taintOf(format);
+            if (arguments != null) {
+                for (Object argument : arguments) {
+                    // Offsets are deliberately artificial here and discarded by reshaped().
+                    // Using String.valueOf(argument) to calculate real widths would invoke
+                    // application toString methods twice and could change application behavior.
+                    combined = TaintedValue.concat(combined, 0, tracker.taintOf(argument));
+                }
+            }
+            if (combined.isTainted()) {
+                tracker.track(result, combined.reshaped(result.length()));
+            }
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            state.exit();
+        }
+    }
+
+    /** Decode the two static {@code String.format} overload shapes without library dependencies. */
+    public static void onStaticStringFormat(String result, Object[] invocationArguments) {
+        if (invocationArguments == null || invocationArguments.length < 2) {
+            return;
+        }
+        int formatIndex = invocationArguments[0] instanceof String ? 0 : 1;
+        if (formatIndex >= invocationArguments.length
+                || !(invocationArguments[formatIndex] instanceof String format)) {
+            return;
+        }
+        int argumentsIndex = formatIndex + 1;
+        Object[] arguments =
+                argumentsIndex < invocationArguments.length
+                                && invocationArguments[argumentsIndex] instanceof Object[] values
+                        ? values
+                        : null;
+        onStringFormat(result, format, arguments);
+    }
+
+    /**
      * Bind the current request context to a task that is about to run on another thread.
      *
      * <p>Returns the original task unchanged when there is nothing to carry, so the common
