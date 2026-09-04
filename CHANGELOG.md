@@ -30,6 +30,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Dashboard formatting ignores generated output and accepts the checkout's native line endings;
   Next.js build tracing is anchored to this repository instead of a parent lockfile.
 
+### Added — Phase 4 recall work
+
+- Java-agent taint now survives `StringBuilder.replace()` and `reverse()` with exact range
+  transforms; replacing the last tainted span with a constant also removes the stale side-table
+  entry instead of producing a false positive later.
+- `HttpServletRequest.getHeaderNames()` is now a source whose lazy enumeration is wrapped without
+  consuming it. The packaged-agent corpus covers the new source and both mutable-string transforms
+  with paired vulnerable and safe cases: **25/25 recall and 0/25 false positives**.
+
 ### Added — Phase 4 (in progress): Java runtime agent
 
 - **Agent wire contracts** in `packages/proto/agent/v1/` — registration, heartbeat, config and

@@ -135,6 +135,37 @@ public final class Advices {
         }
     }
 
+    /** {@code StringBuilder.replace(start, end, value)} with exact range removal and insertion. */
+    public static final class BuilderReplace {
+        private BuilderReplace() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static int enter(@Advice.This CharSequence self) {
+            return self.length();
+        }
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.Enter int lengthBefore,
+                @Advice.This Object self,
+                @Advice.Argument(0) int from,
+                @Advice.Argument(1) int to,
+                @Advice.Argument(2) String replacement) {
+            AgentRuntime.onBuilderReplace(
+                    self, lengthBefore, from, to, replacement, replacement.length());
+        }
+    }
+
+    /** {@code StringBuilder.reverse()} mirrors tracked ranges around the final length. */
+    public static final class BuilderReverse {
+        private BuilderReverse() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(@Advice.This CharSequence self) {
+            AgentRuntime.onBuilderReverse(self, self.length());
+        }
+    }
+
     /**
      * {@code StringConcatFactory.makeConcatWithConstants(...)} — the bootstrap for {@code +}.
      *
@@ -249,6 +280,17 @@ public final class Advices {
                 @Advice.Argument(0) String name,
                 @Advice.Return(readOnly = false) java.util.Enumeration<?> values) {
             values = AgentRuntime.onHeaderEnumeration(values, name);
+        }
+    }
+
+    /** {@code ServletRequest.getHeaderNames()} — wrap so each name is tainted when taken. */
+    public static final class HeaderNameEnumeration {
+        private HeaderNameEnumeration() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.Return(readOnly = false) java.util.Enumeration<?> names) {
+            names = AgentRuntime.onHeaderNameEnumeration(names);
         }
     }
 

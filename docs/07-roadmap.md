@@ -109,12 +109,13 @@ Notes from implementation worth carrying forward:
 - ✅ Bootstrap (`premain`), Byte Buddy transformer, bootstrap helper injection with a re-entrancy
   guard — the agent instruments `StringBuilder`, which it also uses itself.
 - ✅ Range-based taint engine with per-rule-class sanitizer awareness (ADR-0007), propagating through
-  `String`, `StringBuilder`, and **`invokedynamic` string concatenation** — since Java 9 the `+`
-  operator compiles to a `StringConcatFactory` call site, which is how most Java injection is written.
+  `String`, `StringBuilder`/`StringBuffer` append, replace and reverse, `String.split`, Base64 and
+  **`invokedynamic` string concatenation** — since Java 9 the `+` operator compiles to a
+  `StringConcatFactory` call site, which is how most Java injection is written.
 - ✅ HTTP entry point and sources for both servlet API generations: `getParameter`,
-  `getParameterValues`, `getHeader`, `getQueryString`, `getPathInfo`, `getRequestURI`,
-  `Cookie.getValue`. Spring's matched route pattern is read from the request attribute, so findings
-  group by route rather than by path.
+  `getParameterValues`, `getHeader`, `getHeaders`, `getHeaderNames`, `getQueryString`, `getPathInfo`,
+  request-body streams/readers and `Cookie.getValue`. Spring's matched route pattern is read from the
+  request attribute, so findings group by route rather than by path.
 - ✅ Sinks for **all eleven declared rule classes**: SQL, command, path, reflected XSS, open redirect,
   header injection, SSRF, LDAP, XPath, log injection and unsafe deserialization — with per-rule
   sanitizer recognition, so a URL encoder clears the URL-context rules and leaves SQL alone.
@@ -123,8 +124,8 @@ Notes from implementation worth carrying forward:
   finding deduplication.
 - ✅ Durable offline spool, retry backoff, TLS with SPKI certificate pinning.
 - ✅ `apps/gateway`: agent auth, schema validation, per-tenant quota, dedup, Kafka/file/memory sinks.
-- ✅ **Detection gate in CI:** 28 paired vulnerable/safe cases modelled on the OWASP Benchmark
-  categories — **14/14 recall, 0/14 false positives**, no duplicate findings, and every declared rule
+- ✅ **Detection gate in CI:** a 50-case paired vulnerable/safe corpus modelled on the OWASP Benchmark
+  categories — **25/25 recall, 0/25 false positives**, no duplicate findings, and every declared rule
   class proven reachable. Enforced by `CorpusIT`.
 - ✅ **Overhead gate in CI:** the same workload measured with and without the agent, enforced by
   `OverheadIT`. Measured cost is ~30–60µs added per request depending on machine load.
@@ -136,40 +137,32 @@ Notes from implementation worth carrying forward:
   cost is under 1% of a realistic 10ms request, but "< 5% on Spring PetClinic" remains unverified
   because PetClinic has not been run.
 - ✅ **The OWASP Benchmark has been run** — the real thing, all 2,740 cases, against Tomcat 9 with the
-  agent attached. **52.0% recall and 0.0% false positives** across the six categories the agent
-  implements (53.8% excluding LDAP, whose 27 cases never reached a sink because the Benchmark's
-  embedded directory server did not start). The first run scored 35.8%; diagnosing its misses is
-  what produced the propagator and sink work above.
+  agent attached. The corrected driver measured **53.6% recall and 0.0% false positives** across the
+  in-scope categories. The full suite has not yet been rerun after the Base64, request-body,
+  `String.split`, builder replace/reverse and header-name work, so no uplift is claimed yet.
 - ⬜ WebGoat has not been run.
-- ⬜ **Benchmark recall is 52%, not 90%.** The remaining misses are known and enumerated in
-  `docs/05-runtime-agent-design.md` — collection and array propagation, `String.format`, `split`,
-  `replace`, and the request-body sources — rather than guessed at.
+- ⬜ **Benchmark recall is below the required target.** Several measured buckets are now implemented,
+  but the 2,740-case suite must be rerun and the remaining misses in
+  `docs/05-runtime-agent-design.md` closed without regressing the zero-false-positive invariant.
 - ⬜ gRPC transport (see ADR-0010 — the bootstrap loader confines the agent runtime to `java.base`,
   which makes gRPC a restructuring rather than an addition).
 - ⬜ Sources for non-servlet stacks: Spring WebFlux, JAX-RS outside a servlet container.
 - ⬜ Context propagation through `CompletableFuture` chains and Reactor.
-- ⬜ Request-body taint tracking. Currently reported as a coverage gap rather than silently missed.
 
-**Exit criteria — closed 2026-07-29 with the gate NOT met, deliberately.**
+**Exit criteria — not yet met.**
 
 | Criterion | Result |
 |---|---|
 | Zero false positives on the sanitized control set | ✅ **0 of 1,572** in-scope OWASP Benchmark cases |
 | Agent survives a control-plane outage | ✅ verified by `ServletIT` against a refused port |
-| Benchmark produces the expected true positives | ❌ **52% recall**, not the ~90% this implies |
+| Benchmark produces the expected true positives | ❌ corrected baseline is **53.6% recall**; rerun pending |
 | WebGoat run | ❌ not run |
 | Overhead budget met on PetClinic | ❌ measured on a synthetic Jetty + H2 workload instead (+5.8%) |
 
-**Why the phase closes anyway.** Phase 4's own goal is *"a real vulnerability in a real application
-appears in the console"* — and no amount of further agent work can satisfy it. A finding currently
-reaches the gateway, lands in the durable stream, and stops there; the console half of that sentence
-lives in Phase 5. Holding this gate shut keeps the product in a state where it detects genuine
-vulnerabilities and can show them to nobody.
-
-The unmet criteria are **carried into Phase 5 as named debt, not dropped**, and the recall figure now
-has a forcing function in Phase 5's exit criteria rather than an open-ended intention. Every remaining
-miss is additive work against a taint engine already demonstrated correct — no redesign is implied by
-deferring it, which is exactly why deferring it is safe.
+Phase 4 remains in progress until the benchmark, WebGoat and PetClinic evidence above is green. The
+worker now carries gateway events into durable findings, so the end-to-end product goal is reachable;
+that does not waive the explicit quality gates or the repository rule that a phase closes only after
+all exit criteria pass.
 
 ---
 
@@ -188,9 +181,9 @@ deferring it, which is exactly why deferring it is safe.
 
 ### Debt carried in from Phase 4
 
-- **Agent recall.** 52% on the OWASP Benchmark. Largest buckets, in order: collection and array
-  propagation, the reshaping propagators beyond `URLDecoder` (`format`, `split`, `replace`), and
-  request-body sources.
+- **Agent recall.** The corrected OWASP Benchmark baseline is 53.6%. Base64, request-body,
+  `String.split`, builder replace/reverse and header-name gaps have since been implemented, but a
+  full rerun is required before claiming their uplift or recategorizing the remaining misses.
 - WebGoat unrun; overhead unverified on Spring PetClinic; WebFlux and Reactor sources absent.
 
 ### The recall target, revised — and why

@@ -765,6 +765,84 @@ public final class AgentRuntime {
     }
 
     /**
+     * {@code StringBuilder.replace(start, end, value)} — remove old ranges and insert the
+     * replacement's ranges at their new offsets.
+     */
+    public static void onBuilderReplace(
+            Object builder,
+            int lengthBefore,
+            int from,
+            int to,
+            Object replacement,
+            int replacementLength) {
+        AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
+        if (runtime == null || builder == null || !state.enter()) {
+            return;
+        }
+        try {
+            if (!runtime.governor.level().allowsDataflow()) {
+                return;
+            }
+            RequestContext context = state.context();
+            if (context == null || !context.isSampled()) {
+                return;
+            }
+            TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
+            TaintedValue builderTaint = tracker.taintOf(builder);
+            TaintedValue replacementTaint = tracker.taintOf(replacement);
+            if (!builderTaint.isTainted() && !replacementTaint.isTainted()) {
+                return;
+            }
+
+            // AbstractStringBuilder truncates end to its current length. The advice runs only
+            // after a successful call, so start and the effective end are now known-valid.
+            int effectiveTo = Math.min(to, lengthBefore);
+            tracker.track(
+                    builder,
+                    builderTaint.replace(
+                            from, effectiveTo, replacementTaint, replacementLength));
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            state.exit();
+        }
+    }
+
+    /** {@code StringBuilder.reverse()} — mirror every tracked range across the final length. */
+    public static void onBuilderReverse(Object builder, int length) {
+        AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
+        if (runtime == null || builder == null || !state.enter()) {
+            return;
+        }
+        try {
+            if (!runtime.governor.level().allowsDataflow()) {
+                return;
+            }
+            RequestContext context = state.context();
+            if (context == null || !context.isSampled()) {
+                return;
+            }
+            TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
+            TaintedValue builderTaint = tracker.taintOf(builder);
+            if (builderTaint.isTainted()) {
+                tracker.track(builder, builderTaint.reversed(length));
+            }
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            state.exit();
+        }
+    }
+
+    /**
      * Bind the current request context to a task that is about to run on another thread.
      *
      * <p>Returns the original task unchanged when there is nothing to carry, so the common
@@ -944,6 +1022,12 @@ public final class AgentRuntime {
         }
     }
 
+    /** {@code HttpServletRequest.getHeaderNames()} — each returned name is attacker-controlled. */
+    public static java.util.Enumeration<?> onHeaderNameEnumeration(
+            java.util.Enumeration<?> names) {
+        return onHeaderEnumeration(names, null);
+    }
+
     /** Taints each element as the application takes it, and is otherwise transparent. */
     private static final class TaintingEnumeration implements java.util.Enumeration<Object> {
 
@@ -964,7 +1048,10 @@ public final class AgentRuntime {
         public Object nextElement() {
             Object value = delegate.nextElement();
             if (value instanceof String text) {
-                onSource(text, dev.aegis.agent.taint.SourceKind.HEADER, name);
+                onSource(
+                        text,
+                        dev.aegis.agent.taint.SourceKind.HEADER,
+                        name == null ? text : name);
             }
             return value;
         }

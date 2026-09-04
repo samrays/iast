@@ -217,6 +217,25 @@ public final class AegisAgent {
                                                                                         "toString")
                                                                                 .and(
                                                                                         ElementMatchers
+                                                                                                .takesNoArguments())))
+                                                .visit(
+                                                        net.bytebuddy.asm.Advice.to(
+                                                                        Advices.BuilderReplace.class)
+                                                                .on(
+                                                                        ElementMatchers.named("replace")
+                                                                                .and(
+                                                                                        ElementMatchers
+                                                                                                .takesArguments(
+                                                                                                        int.class,
+                                                                                                        int.class,
+                                                                                                        String.class))))
+                                                .visit(
+                                                        net.bytebuddy.asm.Advice.to(
+                                                                        Advices.BuilderReverse.class)
+                                                                .on(
+                                                                        ElementMatchers.named("reverse")
+                                                                                .and(
+                                                                                        ElementMatchers
                                                                                                 .takesNoArguments()))));
 
         // --- sinks -----------------------------------------------------------------------
@@ -429,6 +448,17 @@ public final class AegisAgent {
                         Advices.HeaderEnumeration.class,
                         ElementMatchers.named("getHeaders")
                                 .and(ElementMatchers.takesArgument(0, String.class))
+                                .and(ElementMatchers.isPublic()));
+        builder =
+                advise(
+                        builder,
+                        implementing(
+                                "Request",
+                                "jakarta.servlet.ServletRequest",
+                                "javax.servlet.ServletRequest"),
+                        Advices.HeaderNameEnumeration.class,
+                        ElementMatchers.named("getHeaderNames")
+                                .and(ElementMatchers.takesNoArguments())
                                 .and(ElementMatchers.isPublic()));
 
         // Open redirect and header injection, on the same response.
