@@ -220,4 +220,11 @@ class TestSinks:
 
     def test_build_sink_chooses_by_scheme(self, tmp_path: Path) -> None:
         assert isinstance(build_sink("memory://"), MemoryEventSink)
-        assert isinstance(build_sink(f"file:{tmp_path / 'x.ndjson'}"), FileEventSink)
+        file_sink = build_sink(f"file:{tmp_path / 'x.ndjson'}")
+        assert isinstance(file_sink, FileEventSink)
+        assert file_sink._path == tmp_path / "x.ndjson"
+
+    def test_file_uri_keeps_its_root_and_decodes_escapes(self) -> None:
+        sink = build_sink("file:///var/log/aegis/runtime%20events.ndjson")
+        assert isinstance(sink, FileEventSink)
+        assert sink._path.as_posix() == "/var/log/aegis/runtime events.ndjson"

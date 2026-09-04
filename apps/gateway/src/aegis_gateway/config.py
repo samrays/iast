@@ -61,7 +61,9 @@ class Settings(BaseSettings):
 
     # --- ingest ---------------------------------------------------------------
     #: Where accepted events go. `kafka://`, `file:` or `memory://`.
-    event_sink: str = "memory://"
+    # Match the worker's default source so a local gateway run feeds the control-plane
+    # pipeline instead of acknowledging findings into volatile memory.
+    event_sink: str = "file:.local-data/aegis-events.ndjson"
     max_batch_bytes: Annotated[int, Field(ge=1024)] = 8 * 1024 * 1024
     max_batch_events: Annotated[int, Field(ge=1)] = 512
     #: Strict mode fails the whole batch on one malformed event. Useful when developing an
@@ -84,9 +86,13 @@ class Settings(BaseSettings):
                         "AEGIS_GATEWAY_JWT_SECRET must be set outside local development."
                     )
                 if len(self.jwt_secret) < 32:
-                    raise ValueError("AEGIS_GATEWAY_JWT_SECRET must be at least 32 characters.")
+                    raise ValueError(
+                        "AEGIS_GATEWAY_JWT_SECRET must be at least 32 characters."
+                    )
             elif not self.jwt_public_key:
-                raise ValueError("Asymmetric verification requires AEGIS_GATEWAY_JWT_PUBLIC_KEY.")
+                raise ValueError(
+                    "Asymmetric verification requires AEGIS_GATEWAY_JWT_PUBLIC_KEY."
+                )
             if self.event_sink.startswith("memory://"):
                 raise ValueError(
                     "The in-memory sink discards events on restart and must not be used "

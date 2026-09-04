@@ -296,19 +296,44 @@ class DeliveryTest {
         }
 
         @Test
-        @DisplayName("a rejection the agent cannot fix by waiting is dropped, not spooled forever")
-        void dropsPermanentRejections() throws IOException {
-            AtomicInteger requests = new AtomicInteger();
-            HttpServer server = serve(401, requests);
-            try {
-                Transport transport =
-                        Transport.forEndpoint(
-                                "http://127.0.0.1:" + server.getAddress().getPort(), "token", "");
-                // An expired credential will still be expired in an hour. Retrying forever
-                // would spool the same doomed bytes until the ceiling evicted real findings.
-                assertTrue(transport.sendLines(List.of("{\"event_id\":\"a\"}")));
-            } finally {
-                server.stop(0);
+        @DisplayName("authentication failures are retryable after credential recovery")
+        void reportsAuthenticationFailuresAsRetryable() throws IOException {
+            for (int status : List.of(401, 403)) {
+                AtomicInteger requests = new AtomicInteger();
+                HttpServer server = serve(status, requests);
+                try {
+                    Transport transport =
+                            Transport.forEndpoint(
+                                    "http://127.0.0.1:" + server.getAddress().getPort(),
+                                    "expired-token",
+                                    "");
+                    assertFalse(
+                            transport.sendLines(List.of("{\"event_id\":\"a\"}")),
+                            "status " + status + " must keep the finding for replay");
+                } finally {
+                    server.stop(0);
+                }
+            }
+        }
+
+        @Test
+        @DisplayName("invalid or oversized bytes are dropped instead of poisoning the spool")
+        void dropsPermanentPayloadRejections() throws IOException {
+            for (int status : List.of(400, 413)) {
+                AtomicInteger requests = new AtomicInteger();
+                HttpServer server = serve(status, requests);
+                try {
+                    Transport transport =
+                            Transport.forEndpoint(
+                                    "http://127.0.0.1:" + server.getAddress().getPort(),
+                                    "token",
+                                    "");
+                    assertTrue(
+                            transport.sendLines(List.of("{\"event_id\":\"a\"}")),
+                            "status " + status + " cannot become valid on retry");
+                } finally {
+                    server.stop(0);
+                }
             }
         }
 

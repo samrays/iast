@@ -6,6 +6,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Fixed — repository review
+
+- Local agent ingest now defaults to the worker's durable file stream instead of volatile memory;
+  the vulnerable-app demo fails unless its finding is persisted and readable through the dashboard
+  API.
+- Java agents mark authentication failures as retryable so an enabled offline spool can replay them
+  after credential renewal, while still dropping permanently malformed or oversized payloads.
+- Gateway sink configuration now fails closed instead of silently falling back to volatile memory
+  for an unknown or malformed destination, and file URIs preserve absolute paths and escapes.
+- Kafka producers are created inside the running event loop, restoring compatibility with current
+  `aiokafka`; the missing `StreamOrigin` type import no longer breaks Ruff and mypy.
+- Patched four high-severity npm dependency paths without a framework-major upgrade; CI now permits
+  only the exact remaining PostCSS advisories that require the deferred Next.js 16 migration.
+
+### Changed — repository review
+
+- Local setup now installs and exposes the API, ingest gateway and findings worker together, with
+  documented commands for the complete agent-to-dashboard pipeline.
+- CI now tests and type-checks the worker, treats lockfile-only changes as dashboard changes, audits
+  JavaScript plus all Python runtime dependencies, applies read-only workflow permissions, and pins
+  current Node 24 GitHub Actions releases by commit SHA.
+- Dashboard formatting ignores generated output and accepts the checkout's native line endings;
+  Next.js build tracing is anchored to this repository instead of a parent lockfile.
+
 ### Added — Phase 4 (in progress): Java runtime agent
 
 - **Agent wire contracts** in `packages/proto/agent/v1/` — registration, heartbeat, config and

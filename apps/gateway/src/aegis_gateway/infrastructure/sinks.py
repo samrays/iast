@@ -12,9 +12,12 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlsplit
+from urllib.request import url2pathname
 
 from ..domain.errors import SinkUnavailableError
 from ..domain.events import RuntimeEvent
+from ..domain.ports import StreamOrigin
 
 DEFAULT_TOPIC = "runtime-events"
 
@@ -114,28 +117,38 @@ class KafkaEventSink:
             ) from exc
 
         self._topic = topic
-        self._producer: Any = AIOKafkaProducer(
-            bootstrap_servers=bootstrap_servers,
+        self._producer_type = AIOKafkaProducer
+        self._producer_options: dict[str, Any] = {
+            "bootstrap_servers": bootstrap_servers,
             # `acks=all` because losing a confirmed injection to a broker failover is not an
             # acceptable trade for a few milliseconds of latency.
-            acks=acks,
+            "acks": acks,
             # A small linger batches the many small events a busy agent produces without
             # adding latency anyone can perceive.
-            linger_ms=linger_ms,
-            compression_type="gzip",
-        )
+            "linger_ms": linger_ms,
+            "compression_type": "gzip",
+        }
+        self._producer: Any | None = None
         self._started = False
 
     async def start(self) -> None:
         if not self._started:
+            # aiokafka 0.14+ requires construction inside a running event loop. Keeping
+            # adapter selection synchronous also means parsing configuration never dials a
+            # broker or depends on ambient async state.
+            if self._producer is None:
+                self._producer = self._producer_type(**self._producer_options)
             await self._producer.start()
             self._started = True
 
     async def publish(self, origin: StreamOrigin, events: list[RuntimeEvent]) -> None:
         await self.start()
+        producer = self._producer
+        if producer is None:  # pragma: no cover - start() establishes this invariant
+            raise SinkUnavailableError("Kafka producer did not initialise.")
         try:
             for event in events:
-                await self._producer.send_and_wait(
+                await producer.send_and_wait(
                     self._topic,
                     value=_serialize(origin, event),
                     key=event.partition_key.encode("utf-8"),
@@ -144,9 +157,23 @@ class KafkaEventSink:
             raise SinkUnavailableError(str(exc)) from exc
 
     async def close(self) -> None:
-        if self._started:
+        if self._started and self._producer is not None:
             await self._producer.stop()
             self._started = False
+
+
+def _file_destination_path(destination: str) -> Path:
+    """Translate a file URI without discarding an absolute root or URL escapes."""
+    parsed = urlsplit(destination)
+    if parsed.query or parsed.fragment:
+        raise ValueError("A file event sink may not include a query string or fragment.")
+
+    path = unquote(parsed.path)
+    if parsed.netloc:
+        path = f"//{parsed.netloc}{path}"
+    if not path:
+        raise ValueError("A file event sink requires a path.")
+    return Path(url2pathname(path))
 
 
 def build_sink(destination: str) -> MemoryEventSink | FileEventSink | KafkaEventSink:
@@ -154,10 +181,16 @@ def build_sink(destination: str) -> MemoryEventSink | FileEventSink | KafkaEvent
 
     ``kafka://host:9092/topic``, ``file:///var/log/aegis/events.ndjson`` or ``memory://``.
     """
+    if destination == "memory://":
+        return MemoryEventSink()
     if destination.startswith("kafka://"):
         remainder = destination[len("kafka://") :]
         servers, _, topic = remainder.partition("/")
+        if not servers:
+            raise ValueError("A Kafka event sink requires at least one bootstrap server.")
         return KafkaEventSink(servers, topic or DEFAULT_TOPIC)
     if destination.startswith("file:"):
-        return FileEventSink(Path(destination[len("file:") :].lstrip("/")))
-    return MemoryEventSink()
+        return FileEventSink(_file_destination_path(destination))
+    raise ValueError(
+        "Unsupported event sink. Expected memory://, kafka://<servers>/<topic>, or file:<path>."
+    )
