@@ -1061,6 +1061,28 @@ public final class AgentRuntime {
      */
     public static java.util.Enumeration<?> onHeaderEnumeration(
             java.util.Enumeration<?> values, String name) {
+        return onSourceEnumeration(
+                values, name, dev.aegis.agent.taint.SourceKind.HEADER);
+    }
+
+    /** {@code HttpServletRequest.getHeaderNames()} — each returned name is attacker-controlled. */
+    public static java.util.Enumeration<?> onHeaderNameEnumeration(
+            java.util.Enumeration<?> names) {
+        return onSourceEnumeration(
+                names, null, dev.aegis.agent.taint.SourceKind.HEADER);
+    }
+
+    /** {@code ServletRequest.getParameterNames()} — each returned name is attacker-controlled. */
+    public static java.util.Enumeration<?> onParameterNameEnumeration(
+            java.util.Enumeration<?> names) {
+        return onSourceEnumeration(
+                names, null, dev.aegis.agent.taint.SourceKind.PARAMETER);
+    }
+
+    private static java.util.Enumeration<?> onSourceEnumeration(
+            java.util.Enumeration<?> values,
+            String name,
+            dev.aegis.agent.taint.SourceKind kind) {
         AgentRuntime runtime = instance;
         ThreadState state = ThreadState.current();
         if (runtime == null || values == null || !state.enter()) {
@@ -1074,7 +1096,7 @@ public final class AgentRuntime {
             if (context == null || !context.isSampled()) {
                 return values;
             }
-            return new TaintingEnumeration(values, name);
+            return new TaintingEnumeration(values, name, kind);
         } catch (Throwable t) {
             runtime.hookFailed(t);
             return values;
@@ -1083,21 +1105,20 @@ public final class AgentRuntime {
         }
     }
 
-    /** {@code HttpServletRequest.getHeaderNames()} — each returned name is attacker-controlled. */
-    public static java.util.Enumeration<?> onHeaderNameEnumeration(
-            java.util.Enumeration<?> names) {
-        return onHeaderEnumeration(names, null);
-    }
-
     /** Taints each element as the application takes it, and is otherwise transparent. */
     private static final class TaintingEnumeration implements java.util.Enumeration<Object> {
 
         private final java.util.Enumeration<?> delegate;
         private final String name;
+        private final dev.aegis.agent.taint.SourceKind kind;
 
-        TaintingEnumeration(java.util.Enumeration<?> delegate, String name) {
+        TaintingEnumeration(
+                java.util.Enumeration<?> delegate,
+                String name,
+                dev.aegis.agent.taint.SourceKind kind) {
             this.delegate = delegate;
             this.name = name;
+            this.kind = kind;
         }
 
         @Override
@@ -1109,10 +1130,7 @@ public final class AgentRuntime {
         public Object nextElement() {
             Object value = delegate.nextElement();
             if (value instanceof String text) {
-                onSource(
-                        text,
-                        dev.aegis.agent.taint.SourceKind.HEADER,
-                        name == null ? text : name);
+                onSource(text, kind, name == null ? text : name);
             }
             return value;
         }

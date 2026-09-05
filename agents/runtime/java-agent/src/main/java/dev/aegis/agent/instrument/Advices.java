@@ -319,6 +319,17 @@ public final class Advices {
         }
     }
 
+    /** {@code ServletRequest.getParameterNames()} — wrap so each name is tainted when taken. */
+    public static final class ParameterNameEnumeration {
+        private ParameterNameEnumeration() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.Return(readOnly = false) java.util.Enumeration<?> names) {
+            names = AgentRuntime.onParameterNameEnumeration(names);
+        }
+    }
+
     /**
      * {@code Connection.prepareStatement(sql)} and {@code prepareCall(sql)}.
      *

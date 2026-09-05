@@ -36,13 +36,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added — Phase 4 recall work
 
+- `HttpServletRequest.getParameterNames()` now lazily taints each attacker-controlled name as the
+  application consumes the enumeration, with a paired vulnerable/safe SQL corpus case. A complete
+  LDAP-enabled OWASP Benchmark rerun now reaches **71.8% recall with 0/753 false positives**, clearing
+  the Phase 4 ≥65% recall gate.
 - Java-agent taint now survives `StringBuilder.replace()` and `reverse()` with exact range
   transforms, plus `String.format()` and `String.formatted()` as conservative whole-value
   transforms; replacing the last tainted span with a constant also removes the stale side-table
   entry instead of producing a false positive later.
 - `HttpServletRequest.getHeaderNames()` is now a source whose lazy enumeration is wrapped without
   consuming it. The packaged-agent corpus covers the new source and both mutable-string transforms
-  with paired vulnerable and safe cases: **27/27 recall and 0/27 false positives**.
+  with paired vulnerable and safe cases: **28/28 recall and 0/28 false positives**.
 
 ### Added — Phase 4 (in progress): Java runtime agent
 

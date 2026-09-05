@@ -484,6 +484,17 @@ public final class AegisAgent {
                         ElementMatchers.named("getHeaderNames")
                                 .and(ElementMatchers.takesNoArguments())
                                 .and(ElementMatchers.isPublic()));
+        builder =
+                advise(
+                        builder,
+                        implementing(
+                                "Request",
+                                "jakarta.servlet.ServletRequest",
+                                "javax.servlet.ServletRequest"),
+                        Advices.ParameterNameEnumeration.class,
+                        ElementMatchers.named("getParameterNames")
+                                .and(ElementMatchers.takesNoArguments())
+                                .and(ElementMatchers.isPublic()));
 
         // Open redirect and header injection, on the same response.
         builder =

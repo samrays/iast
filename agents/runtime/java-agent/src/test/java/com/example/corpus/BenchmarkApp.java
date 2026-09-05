@@ -147,6 +147,12 @@ public final class BenchmarkApp {
                 "sql-injection",
                 "X-Aegis-Probe");
         register("/header/name-constant", Expectation.SAFE, "", "X-Aegis-Probe");
+        register(
+                "/parameter/name-to-sql",
+                Expectation.VULNERABLE,
+                "sql-injection",
+                "X-Aegis-Parameter");
+        register("/parameter/name-constant", Expectation.SAFE, "", "X-Aegis-Parameter");
 
         // --- Server-side request forgery --------------------------------------------------
         register("/ssrf/url", Expectation.VULNERABLE, "ssrf", "evil.example.com");
@@ -244,6 +250,8 @@ public final class BenchmarkApp {
                                 : path.startsWith("/header/name-")
                                         ? getWithHeaderName(
                                                 port, path + "?name=ignored", payload)
+                                : path.startsWith("/parameter/name-")
+                                        ? getWithParameterName(port, path, payload)
                                 : path.startsWith("/body/")
                                         ? post(port, path, payload)
                                         : get(port, path + "?name=" + payload, null);
@@ -298,6 +306,27 @@ public final class BenchmarkApp {
         HttpRequest request =
                 HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
                         .header(headerName, "present")
+                        .GET()
+                        .build();
+        HttpResponse<String> response =
+                HttpClient.newBuilder()
+                        .build()
+                        .send(request, HttpResponse.BodyHandlers.ofString());
+        return response.statusCode() + ":" + response.body().trim();
+    }
+
+    private static String getWithParameterName(int port, String path, String parameterName)
+            throws Exception {
+        String encodedName = URLEncoder.encode(parameterName, StandardCharsets.UTF_8);
+        HttpRequest request =
+                HttpRequest.newBuilder(
+                                URI.create(
+                                        "http://127.0.0.1:"
+                                                + port
+                                                + path
+                                                + "?"
+                                                + encodedName
+                                                + "=selected"))
                         .GET()
                         .build();
         HttpResponse<String> response =
@@ -386,6 +415,8 @@ public final class BenchmarkApp {
                 case "/header/constant" -> headerConstant(name, response);
                 case "/header/name-to-sql" -> headerNameToSql(request);
                 case "/header/name-constant" -> headerNameConstant(request);
+                case "/parameter/name-to-sql" -> parameterNameToSql(request);
+                case "/parameter/name-constant" -> parameterNameConstant(request);
                 case "/ssrf/url" -> ssrfFromInput(name);
                 case "/ssrf/constant" -> ssrfConstant(name);
                 case "/ldap/search" -> ldapFromInput(name);
@@ -723,6 +754,29 @@ public final class BenchmarkApp {
         private String headerNameConstant(HttpServletRequest request) throws Exception {
             int seen = 0;
             java.util.Enumeration<String> names = request.getHeaderNames();
+            while (names.hasMoreElements()) {
+                names.nextElement();
+                seen++;
+            }
+            return query("SELECT name FROM users WHERE id = 1") + ":" + seen;
+        }
+
+        private String parameterNameToSql(HttpServletRequest request) throws Exception {
+            String selected = "missing";
+            java.util.Enumeration<String> names = request.getParameterNames();
+            while (names.hasMoreElements()) {
+                String candidate = names.nextElement();
+                String[] values = request.getParameterValues(candidate);
+                if (values != null && values.length > 0 && values[0].equals("selected")) {
+                    selected = candidate;
+                }
+            }
+            return query("SELECT name FROM users WHERE name = '" + selected + "'");
+        }
+
+        private String parameterNameConstant(HttpServletRequest request) throws Exception {
+            int seen = 0;
+            java.util.Enumeration<String> names = request.getParameterNames();
             while (names.hasMoreElements()) {
                 names.nextElement();
                 seen++;

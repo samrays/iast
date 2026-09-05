@@ -114,9 +114,10 @@ Notes from implementation worth carrying forward:
   `+` operator compiles to a `StringConcatFactory` call site, which is how most Java injection is
   written.
 - ✅ HTTP entry point and sources for both servlet API generations: `getParameter`,
-  `getParameterValues`, `getHeader`, `getHeaders`, `getHeaderNames`, `getQueryString`, `getPathInfo`,
-  request-body streams/readers and `Cookie.getValue`. Spring's matched route pattern is read from the
-  request attribute, so findings group by route rather than by path.
+  `getParameterValues`, `getParameterNames`, `getHeader`, `getHeaders`, `getHeaderNames`,
+  `getQueryString`, `getPathInfo`, request-body streams/readers and `Cookie.getValue`. Spring's
+  matched route pattern is read from the request attribute, so findings group by route rather than
+  by path.
 - ✅ Sinks for **all eleven declared rule classes**: SQL, command, path, reflected XSS, open redirect,
   header injection, SSRF, LDAP, XPath, log injection and unsafe deserialization — with per-rule
   sanitizer recognition, so a URL encoder clears the URL-context rules and leaves SQL alone.
@@ -125,8 +126,8 @@ Notes from implementation worth carrying forward:
   finding deduplication.
 - ✅ Durable offline spool, retry backoff, TLS with SPKI certificate pinning.
 - ✅ `apps/gateway`: agent auth, schema validation, per-tenant quota, dedup, Kafka/file/memory sinks.
-- ✅ **Detection gate in CI:** a 54-case paired vulnerable/safe corpus modelled on the OWASP Benchmark
-  categories — **27/27 recall, 0/27 false positives**, no duplicate findings, and every declared rule
+- ✅ **Detection gate in CI:** a 56-case paired vulnerable/safe corpus modelled on the OWASP Benchmark
+  categories — **28/28 recall, 0/28 false positives**, no duplicate findings, and every declared rule
   class proven reachable. Enforced by `CorpusIT`.
 - ✅ **Overhead gate in CI:** the same workload measured with and without the agent, enforced by
   `OverheadIT`. Measured cost is ~30–60µs added per request depending on machine load.
@@ -138,13 +139,13 @@ Notes from implementation worth carrying forward:
   cost is under 1% of a realistic 10ms request, but "< 5% on Spring PetClinic" remains unverified
   because PetClinic has not been run.
 - ✅ **The OWASP Benchmark has been run** — the real thing, all 2,740 cases, against Tomcat 9 with the
-  agent attached. After matching the official crawler's POST/GET behavior, the latest run measured
-  **60.2% recall and 0.0% false positives** across the in-scope categories. LDAP remains unexercised
-  until the fixture's ApacheDS service is active.
+  agent attached and ApacheDS active. After matching the official crawler's POST/GET behavior and
+  adding parameter-name taint, the latest run measured **71.8% recall and 0.0% false positives**
+  across the in-scope categories.
 - ⬜ WebGoat has not been run.
-- ⬜ **Benchmark recall is below the required target.** Several measured buckets are now implemented,
-  but the 2,740-case suite must be rerun and the remaining misses in
-  `docs/05-runtime-agent-design.md` closed without regressing the zero-false-positive invariant.
+- ✅ **Benchmark recall exceeds the required target:** 71.8% against the ≥65% gate, without
+  regressing the zero-false-positive invariant. The remaining 231 misses still require the named
+  causal classification documented below.
 - ⬜ gRPC transport (see ADR-0010 — the bootstrap loader confines the agent runtime to `java.base`,
   which makes gRPC a restructuring rather than an addition).
 - ⬜ Sources for non-servlet stacks: Spring WebFlux, JAX-RS outside a servlet container.
@@ -156,7 +157,7 @@ Notes from implementation worth carrying forward:
 |---|---|
 | Zero false positives on the sanitized control set | ✅ **0 of 753** in-scope safe OWASP Benchmark cases |
 | Agent survives a control-plane outage | ✅ verified by `ServletIT` against a refused port |
-| Benchmark produces the expected true positives | ❌ **60.2% recall**; target is ≥65% and LDAP is unexercised |
+| Benchmark produces the expected true positives | ✅ **71.8% recall**, above the ≥65% gate; LDAP exercised |
 | WebGoat run | ❌ not run |
 | Overhead budget met on PetClinic | ❌ measured on a synthetic Jetty + H2 workload instead (+5.8%) |
 
@@ -182,8 +183,8 @@ all exit criteria pass.
 
 ### Debt carried in from Phase 4
 
-- **Agent recall.** The corrected OWASP Benchmark baseline is 60.2% with 0/753 false positives.
-  `getParameterNames()` accounts for 102 of the 326 remaining misses and is the next source gap.
+- **Agent recall.** The LDAP-enabled OWASP Benchmark result is 71.8% with 0/753 false positives,
+  above the Phase 4 gate. The remaining 231 misses still need a named-cause classification.
 - WebGoat unrun; overhead unverified on Spring PetClinic; WebFlux and Reactor sources absent.
 
 ### The recall target, revised — and why
