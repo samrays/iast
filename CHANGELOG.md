@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed — repository review
 
+- The OWASP Benchmark driver now follows the official BenchmarkUtils method rule: servlet cases
+  use POST unless the crawler XML supplies query parameters. The previous implicit-GET behavior
+  bypassed cookie and other `doPost` flows; a full 2,740-route rerun now measures **60.2% recall
+  with 0/753 false positives**, up from the invalid 53.6% baseline.
 - Local agent ingest now defaults to the worker's durable file stream instead of volatile memory;
   the vulnerable-app demo fails unless its finding is persisted and readable through the dashboard
   API.

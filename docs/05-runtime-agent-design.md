@@ -176,58 +176,49 @@ Dataflow only, and all eleven of its rule classes:
 
 ### Measured against the OWASP Benchmark
 
-All 2,740 cases of OWASP Benchmark v1.2 were run against Tomcat 9 with the agent attached and scored
-against the published answer key (`scripts/benchmark/run_owasp_benchmark.py`). The category breakdown
-below is the last complete breakdown before the benchmark driver correction and later propagators.
-The corrected driver measured a **53.6%** in-scope baseline with **0% false positives**; the full
-suite must be rerun after the additions listed below before claiming their recall uplift.
+All 2,740 cases of OWASP Benchmark v1.2 were run against Tomcat 9.0.120 with the agent attached and
+scored against the published answer key (`scripts/benchmark/run_owasp_benchmark.py`). The driver now
+matches BenchmarkUtils' official method rule — POST unless query parameters require GET — instead of
+letting `urllib` silently turn empty-body servlet requests into GET. Every route executed with zero
+unreachable requests and zero 404s. The corrected run measured **60.2%** in-scope recall with
+**0/753 false positives**. LDAP remains unexercised because ApacheDS was not active in this run.
 
 | Category | Cases | Recall | False positives |
 |---|---|---|---|
-| `xpathi` | 35 | 66.7% | 0% |
+| `xpathi` | 35 | 80.0% | 0% |
 | `xss` | 455 | 61.4% | 0% |
-| `sqli` | 504 | 58.8% | 0% |
-| `cmdi` | 251 | 45.2% | 0% |
-| `pathtraver` | 268 | 36.1% | 0% |
+| `sqli` | 504 | 67.6% | 0% |
+| `cmdi` | 251 | 51.6% | 0% |
+| `pathtraver` | 268 | 60.9% | 0% |
 | `ldapi` | 59 | *not exercised* | — |
-| **In scope** | **1,572** | **52.0%** | **0.0%** |
+| **In scope** | **1,572** | **60.2%** | **0.0%** |
 
 **Zero false positives**, on a suite built specifically to bait scanners with near-miss variants.
 That is the number the identity-keyed taint table and per-rule sanitizers exist to protect, and it
 is worth more than recall: one false positive on correct code costs more trust than ten true
 positives earn.
 
-`ldapi` reads 0/27 but was never measured — the Benchmark's embedded ApacheDS did not start, so
-every case threw `CommunicationException` at `getDirContext()` before reaching a sink. Excluding it,
-recall is 53.8%.
+`ldapi` reads 0/27 but was not exercised — ApacheDS was not active, so every case threw
+`CommunicationException` at `getDirContext()` before reaching a sink. Excluding it, recall is 62.2%.
 
-**The 366 misses from the last fully categorized run have been characterized** — every group below
-has a named cause, measured by cross-referencing each missed case's source against the cases that
-were found. The corrected 53.6% baseline changed the total, and the next full run must regenerate
-this breakdown rather than mixing counts from different executions.
+The corrected request-method run leaves **326 misses**. The first regenerated bucket is precise:
+102 missed vulnerable cases enumerate `getParameterNames()`, whose returned names are not yet taint
+sources. The remaining overlapping shapes below are starting points for causal tracing, not additive
+totals; each miss still needs one named terminal cause before the gate closes.
 
 | # | Cause | Cases | Kind |
 |---|---|---|---|
-| 1 | `getParameterValues` with no intervening transform | ~40 | **unexplained — largest group, needs a trace** |
-| 2 | `Base64.decode` → `byte[]` → `new String(bytes)` | ~32 | implemented; rerun pending |
-| 3 | ESAPI encoder methods used as pass-throughs | ~29 | missing propagators |
-| 4 | `getQueryString` (with and without `substring`) | ~31 | unexplained; the source is hooked |
-| 5 | `getHeader`/`getHeaders` beyond the enumeration wrapper | ~39 | partially addressed |
-| 6 | Cookie-sourced | ~60 | **unexplained — five theories eliminated** |
-| 7 | `StringBuilder.replace`/`reverse` | ~40 | implemented; rerun pending |
-| 8 | `String.split` | ~25 | implemented; rerun pending |
-| 9 | `getHeaderNames()` | ~14 | implemented; rerun pending |
-| 10 | `String.format` / `String.formatted` | uncounted | implemented; rerun pending |
+| 1 | `getParameterNames()` used as data | 102 | source not implemented |
+| 2 | `getParameterValues` | 134 overlapping cases | trace after parameter-name source lands |
+| 3 | `getQueryString` | 36 overlapping cases | source is hooked; trace required |
+| 4 | `getHeader`/`getHeaders`/`getHeaderNames` | 57 overlapping cases | trace required |
+| 5 | Cookie-sourced | 19 overlapping cases | corrected POST driver recovered 45 findings |
+| 6 | Base64 | 104 overlapping cases | propagator exists; downstream gap remains |
+| 7 | Collections/maps | 75 overlapping cases | object/container propagation suspected |
 
-**Groups 2, 7, 8, 9 and 10 are implemented and covered by the packaged-agent corpus.** Group 3 remains
-implementable work of the same shape as the `URLDecoder` propagator, but its ESAPI semantics need a
-paired safe control before adding it: an encoder used as a sanitizer must not be reclassified as a
-pass-through merely to raise recall.
-
-**Groups 1, 4 and 6 are unexplained and must be traced, not guessed at.** All three involve sources
-that are hooked and demonstrably work in the corpus. Five separate hypotheses for group 6 were
-investigated and every one was wrong, which is the reason this table exists: a target set over an
-uncharacterised tail is a target set over an assumption.
+The parameter-name source is the next measured implementation. ESAPI encoder methods remain
+sanitizers, not pass-through propagators: reclassifying them merely to raise recall would trade away
+the zero-false-positive invariant.
 
 One further gap is known and unmeasured against the Benchmark:
 

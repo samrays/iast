@@ -138,9 +138,9 @@ Notes from implementation worth carrying forward:
   cost is under 1% of a realistic 10ms request, but "< 5% on Spring PetClinic" remains unverified
   because PetClinic has not been run.
 - ✅ **The OWASP Benchmark has been run** — the real thing, all 2,740 cases, against Tomcat 9 with the
-  agent attached. The corrected driver measured **53.6% recall and 0.0% false positives** across the
-  in-scope categories. The full suite has not yet been rerun after the Base64, request-body,
-  `String.split`, builder replace/reverse and header-name work, so no uplift is claimed yet.
+  agent attached. After matching the official crawler's POST/GET behavior, the latest run measured
+  **60.2% recall and 0.0% false positives** across the in-scope categories. LDAP remains unexercised
+  until the fixture's ApacheDS service is active.
 - ⬜ WebGoat has not been run.
 - ⬜ **Benchmark recall is below the required target.** Several measured buckets are now implemented,
   but the 2,740-case suite must be rerun and the remaining misses in
@@ -154,9 +154,9 @@ Notes from implementation worth carrying forward:
 
 | Criterion | Result |
 |---|---|
-| Zero false positives on the sanitized control set | ✅ **0 of 1,572** in-scope OWASP Benchmark cases |
+| Zero false positives on the sanitized control set | ✅ **0 of 753** in-scope safe OWASP Benchmark cases |
 | Agent survives a control-plane outage | ✅ verified by `ServletIT` against a refused port |
-| Benchmark produces the expected true positives | ❌ corrected baseline is **53.6% recall**; rerun pending |
+| Benchmark produces the expected true positives | ❌ **60.2% recall**; target is ≥65% and LDAP is unexercised |
 | WebGoat run | ❌ not run |
 | Overhead budget met on PetClinic | ❌ measured on a synthetic Jetty + H2 workload instead (+5.8%) |
 
@@ -182,9 +182,8 @@ all exit criteria pass.
 
 ### Debt carried in from Phase 4
 
-- **Agent recall.** The corrected OWASP Benchmark baseline is 53.6%. Base64, request-body,
-  `String.split`, builder replace/reverse and header-name gaps have since been implemented, but a
-  full rerun is required before claiming their uplift or recategorizing the remaining misses.
+- **Agent recall.** The corrected OWASP Benchmark baseline is 60.2% with 0/753 false positives.
+  `getParameterNames()` accounts for 102 of the 326 remaining misses and is the next source gap.
 - WebGoat unrun; overhead unverified on Spring PetClinic; WebFlux and Reactor sources absent.
 
 ### The recall target, revised — and why
