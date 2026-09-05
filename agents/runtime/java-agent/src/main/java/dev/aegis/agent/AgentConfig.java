@@ -226,6 +226,7 @@ public final class AgentConfig {
         settings.put("redact_keys", String.join(",", redactKeys));
         settings.put("packages", String.join(",", applicationPackages));
         settings.put("buffer_capacity", Integer.toString(bufferCapacity));
+        settings.put("blocking", Boolean.toString(blockingEnabled));
         settings.put("spool_dir", spoolDirectory);
         settings.put("spool_max_bytes", Long.toString(spoolMaxBytes));
         settings.put("pins", certificatePins);

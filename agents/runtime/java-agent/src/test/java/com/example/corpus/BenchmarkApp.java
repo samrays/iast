@@ -102,10 +102,14 @@ public final class BenchmarkApp {
         register("/sql/builder-reverse", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
         register("/sql/format", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
         register("/sql/formatted", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
+        // A real tainted flow with a benign payload. Detection should report CONFIRMED, while
+        // blocking must let the query execute because exploitation was not confirmed.
+        register("/sql/confirmed", Expectation.VULNERABLE, "sql-injection", "alice");
         register("/sql/builder-replace-clears", Expectation.SAFE, "", SQL_PAYLOAD);
         register("/sql/builder-reverse-constant", Expectation.SAFE, "", SQL_PAYLOAD);
         register("/sql/format-constant", Expectation.SAFE, "", SQL_PAYLOAD);
         register("/sql/formatted-constant", Expectation.SAFE, "", SQL_PAYLOAD);
+        register("/sql/confirmed-constant", Expectation.SAFE, "", "alice");
         register("/sql/prepared", Expectation.SAFE, "", SQL_PAYLOAD);
         register("/sql/constant", Expectation.SAFE, "", SQL_PAYLOAD);
         register("/sql/identity", Expectation.SAFE, "", "alice");
@@ -393,10 +397,12 @@ public final class BenchmarkApp {
                 case "/sql/builder-reverse" -> sqlBuilderReverse(name);
                 case "/sql/format" -> sqlFormat(name);
                 case "/sql/formatted" -> sqlFormatted(name);
+                case "/sql/confirmed" -> sqlPlus(name);
                 case "/sql/builder-replace-clears" -> sqlBuilderReplaceClears(name);
                 case "/sql/builder-reverse-constant" -> sqlBuilderReverseConstant(name);
                 case "/sql/format-constant" -> sqlFormatConstant(name);
                 case "/sql/formatted-constant" -> sqlFormattedConstant(name);
+                case "/sql/confirmed-constant" -> sqlConstant(name);
                 case "/sql/prepared" -> sqlPrepared(name);
                 case "/sql/constant" -> sqlConstant(name);
                 case "/sql/identity" -> sqlIdentity(name);
