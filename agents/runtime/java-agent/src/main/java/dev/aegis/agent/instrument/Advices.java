@@ -135,6 +135,62 @@ public final class Advices {
         }
     }
 
+    /** {@code StringBuilder.replace(start, end, value)} with exact range removal and insertion. */
+    public static final class BuilderReplace {
+        private BuilderReplace() {}
+
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static int enter(@Advice.This CharSequence self) {
+            return self.length();
+        }
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.Enter int lengthBefore,
+                @Advice.This Object self,
+                @Advice.Argument(0) int from,
+                @Advice.Argument(1) int to,
+                @Advice.Argument(2) String replacement) {
+            AgentRuntime.onBuilderReplace(
+                    self, lengthBefore, from, to, replacement, replacement.length());
+        }
+    }
+
+    /** {@code StringBuilder.reverse()} mirrors tracked ranges around the final length. */
+    public static final class BuilderReverse {
+        private BuilderReverse() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(@Advice.This CharSequence self) {
+            AgentRuntime.onBuilderReverse(self, self.length());
+        }
+    }
+
+    /** Static {@code String.format} overloads. */
+    public static final class StaticStringFormat {
+        private StaticStringFormat() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.AllArguments Object[] invocationArguments,
+                @Advice.Return String result) {
+            AgentRuntime.onStaticStringFormat(result, invocationArguments);
+        }
+    }
+
+    /** Instance {@code String.formatted(Object...)}. */
+    public static final class FormattedString {
+        private FormattedString() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.This Object format,
+                @Advice.Argument(0) Object[] arguments,
+                @Advice.Return String result) {
+            AgentRuntime.onStringFormat(result, format, arguments);
+        }
+    }
+
     /**
      * {@code StringConcatFactory.makeConcatWithConstants(...)} — the bootstrap for {@code +}.
      *
@@ -213,9 +269,10 @@ public final class Advices {
     public static final class JdbcStatement {
         private JdbcStatement() {}
 
-        @Advice.OnMethodEnter(suppress = Throwable.class)
+        @Advice.OnMethodEnter
         public static void enter(@Advice.Argument(0) Object sql) {
-            AgentRuntime.onSink(sql, RuleClass.SQL_INJECTION, "java.sql.Statement#execute(String)");
+            AgentRuntime.onBlockingSink(
+                    sql, RuleClass.SQL_INJECTION, "java.sql.Statement#execute(String)");
         }
     }
 
@@ -252,6 +309,28 @@ public final class Advices {
         }
     }
 
+    /** {@code ServletRequest.getHeaderNames()} — wrap so each name is tainted when taken. */
+    public static final class HeaderNameEnumeration {
+        private HeaderNameEnumeration() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.Return(readOnly = false) java.util.Enumeration<?> names) {
+            names = AgentRuntime.onHeaderNameEnumeration(names);
+        }
+    }
+
+    /** {@code ServletRequest.getParameterNames()} — wrap so each name is tainted when taken. */
+    public static final class ParameterNameEnumeration {
+        private ParameterNameEnumeration() {}
+
+        @Advice.OnMethodExit(suppress = Throwable.class)
+        public static void exit(
+                @Advice.Return(readOnly = false) java.util.Enumeration<?> names) {
+            names = AgentRuntime.onParameterNameEnumeration(names);
+        }
+    }
+
     /**
      * {@code Connection.prepareStatement(sql)} and {@code prepareCall(sql)}.
      *
@@ -263,9 +342,9 @@ public final class Advices {
     public static final class JdbcPrepare {
         private JdbcPrepare() {}
 
-        @Advice.OnMethodEnter(suppress = Throwable.class)
+        @Advice.OnMethodEnter
         public static void enter(@Advice.Argument(0) Object sql) {
-            AgentRuntime.onSink(
+            AgentRuntime.onBlockingSink(
                     sql, RuleClass.SQL_INJECTION, "java.sql.Connection#prepareStatement(String)");
         }
     }
@@ -274,7 +353,7 @@ public final class Advices {
     public static final class ProcessStart {
         private ProcessStart() {}
 
-        @Advice.OnMethodEnter(suppress = Throwable.class)
+        @Advice.OnMethodEnter
         public static void enter(@Advice.This ProcessBuilder builder) {
             AgentRuntime.onProcessStart(builder);
         }
@@ -284,7 +363,7 @@ public final class Advices {
     public static final class ResponseFormat {
         private ResponseFormat() {}
 
-        @Advice.OnMethodEnter(suppress = Throwable.class)
+        @Advice.OnMethodEnter
         public static void enter(
                 @Advice.This Object target, @Advice.AllArguments Object[] arguments) {
             AgentRuntime.onResponseFormat(target, arguments);
@@ -295,9 +374,9 @@ public final class Advices {
     public static final class CommandExec {
         private CommandExec() {}
 
-        @Advice.OnMethodEnter(suppress = Throwable.class)
+        @Advice.OnMethodEnter
         public static void enter(@Advice.Argument(0) Object command) {
-            AgentRuntime.onSink(
+            AgentRuntime.onBlockingSink(
                     command, RuleClass.COMMAND_INJECTION, "java.lang.Runtime#exec(String)");
         }
     }
@@ -306,9 +385,10 @@ public final class Advices {
     public static final class FileAccess {
         private FileAccess() {}
 
-        @Advice.OnMethodEnter(suppress = Throwable.class)
+        @Advice.OnMethodEnter
         public static void enter(@Advice.Argument(0) Object path) {
-            AgentRuntime.onSink(path, RuleClass.PATH_TRAVERSAL, "java.io.File#<init>(String)");
+            AgentRuntime.onBlockingSink(
+                    path, RuleClass.PATH_TRAVERSAL, "java.io.File#<init>(String)");
         }
     }
 
@@ -326,12 +406,12 @@ public final class Advices {
     public static final class FileConstructWithParent {
         private FileConstructWithParent() {}
 
-        @Advice.OnMethodEnter(suppress = Throwable.class)
+        @Advice.OnMethodEnter
         public static void enter(
                 @Advice.Argument(0) Object parent, @Advice.Argument(1) Object child) {
-            AgentRuntime.onSink(
+            AgentRuntime.onBlockingSink(
                     parent, RuleClass.PATH_TRAVERSAL, "java.io.File#<init>(.., String)");
-            AgentRuntime.onSink(
+            AgentRuntime.onBlockingSink(
                     child, RuleClass.PATH_TRAVERSAL, "java.io.File#<init>(.., String)");
         }
     }
@@ -340,9 +420,9 @@ public final class Advices {
     public static final class LdapSearch {
         private LdapSearch() {}
 
-        @Advice.OnMethodEnter(suppress = Throwable.class)
+        @Advice.OnMethodEnter
         public static void enter(@Advice.Argument(1) Object filter) {
-            AgentRuntime.onSink(
+            AgentRuntime.onBlockingSink(
                     filter,
                     RuleClass.LDAP_INJECTION,
                     "javax.naming.directory.DirContext#search(String,String,..)");
@@ -353,9 +433,9 @@ public final class Advices {
     public static final class XPathEvaluate {
         private XPathEvaluate() {}
 
-        @Advice.OnMethodEnter(suppress = Throwable.class)
+        @Advice.OnMethodEnter
         public static void enter(@Advice.Argument(0) Object expression) {
-            AgentRuntime.onSink(
+            AgentRuntime.onBlockingSink(
                     expression,
                     RuleClass.XPATH_INJECTION,
                     "javax.xml.xpath.XPath#evaluate(String,..)");
@@ -366,9 +446,9 @@ public final class Advices {
     public static final class UrlConstruction {
         private UrlConstruction() {}
 
-        @Advice.OnMethodEnter(suppress = Throwable.class)
+        @Advice.OnMethodEnter
         public static void enter(@Advice.Argument(0) Object target) {
-            AgentRuntime.onSink(target, RuleClass.SSRF, "java.net.URL#<init>(String)");
+            AgentRuntime.onBlockingSink(target, RuleClass.SSRF, "java.net.URL#<init>(String)");
         }
     }
 
@@ -376,9 +456,9 @@ public final class Advices {
     public static final class Redirect {
         private Redirect() {}
 
-        @Advice.OnMethodEnter(suppress = Throwable.class)
+        @Advice.OnMethodEnter
         public static void enter(@Advice.Argument(0) Object location) {
-            AgentRuntime.onSink(
+            AgentRuntime.onBlockingSink(
                     location,
                     RuleClass.OPEN_REDIRECT,
                     "jakarta.servlet.http.HttpServletResponse#sendRedirect(String)");
@@ -394,14 +474,14 @@ public final class Advices {
     public static final class ResponseHeader {
         private ResponseHeader() {}
 
-        @Advice.OnMethodEnter(suppress = Throwable.class)
+        @Advice.OnMethodEnter
         public static void enter(
                 @Advice.Argument(0) Object name, @Advice.Argument(1) Object value) {
-            AgentRuntime.onSink(
+            AgentRuntime.onBlockingSink(
                     name,
                     RuleClass.HEADER_INJECTION,
                     "jakarta.servlet.http.HttpServletResponse#setHeader(String,String)");
-            AgentRuntime.onSink(
+            AgentRuntime.onBlockingSink(
                     value,
                     RuleClass.HEADER_INJECTION,
                     "jakarta.servlet.http.HttpServletResponse#setHeader(String,String)");
@@ -412,9 +492,10 @@ public final class Advices {
     public static final class LogWrite {
         private LogWrite() {}
 
-        @Advice.OnMethodEnter(suppress = Throwable.class)
+        @Advice.OnMethodEnter
         public static void enter(@Advice.Argument(0) Object message) {
-            AgentRuntime.onSink(message, RuleClass.LOG_INJECTION, "org.slf4j.Logger#info(String)");
+            AgentRuntime.onBlockingSink(
+                    message, RuleClass.LOG_INJECTION, "org.slf4j.Logger#info(String)");
         }
     }
 
@@ -506,7 +587,7 @@ public final class Advices {
     public static final class ResponseWrite {
         private ResponseWrite() {}
 
-        @Advice.OnMethodEnter(suppress = Throwable.class)
+        @Advice.OnMethodEnter
         public static void enter(@Advice.This Object target, @Advice.Argument(0) Object value) {
             AgentRuntime.onResponseWrite(target, value);
         }

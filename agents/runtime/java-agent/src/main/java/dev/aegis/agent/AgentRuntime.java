@@ -16,10 +16,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * The single static entry point every instrumented method calls into.
  *
  * <p>Advice code is inlined into the application's own methods, so it must be tiny and it
- * must be impossible for it to throw. Every public method here is wrapped: any internal
+ * must be impossible for it to throw accidentally. Every public hook here is wrapped: any internal
  * failure disables that hook, increments a counter and returns control to the application
- * immediately. There is no path in which an agent exception propagates into customer code —
- * that is the fail-open guarantee, and it is what makes this safe to run in production.
+ * immediately. The only deliberate exception is {@link #onBlockingSink}: when blocking is enabled
+ * and an unsanitized tainted value both reaches the sink and matches an attack signature, it throws
+ * a {@link SecurityException} before the sink executes. Ordinary confirmed flows still fail open.
  */
 public final class AgentRuntime {
 
@@ -29,6 +30,7 @@ public final class AgentRuntime {
     private final Reporter reporter;
     private final ResourceGovernor governor;
     private final Redactor redactor;
+    private final boolean blockingEnabled;
     private final AtomicLong hookFailures = new AtomicLong();
     private final AtomicLong sinksEvaluated = new AtomicLong();
     private final AtomicLong findingsReported = new AtomicLong();
@@ -37,11 +39,13 @@ public final class AgentRuntime {
             Redactor redactor,
             java.util.Set<String> applicationPackages,
             int bufferCapacity,
-            double cpuBudgetPct) {
+            double cpuBudgetPct,
+            boolean blockingEnabled) {
         this.redactor = redactor;
         this.detector = new SinkDetector(redactor, applicationPackages);
         this.reporter = new Reporter(bufferCapacity);
         this.governor = new ResourceGovernor(cpuBudgetPct);
+        this.blockingEnabled = blockingEnabled;
     }
 
     /**
@@ -75,7 +79,8 @@ public final class AgentRuntime {
                         redactor,
                         splitToSet(setting(settings, "packages", "")),
                         (int) number(settings, "buffer_capacity", 4096),
-                        number(settings, "cpu_budget_pct", 5.0));
+                        number(settings, "cpu_budget_pct", 5.0),
+                        Boolean.parseBoolean(setting(settings, "blocking", "false")));
         install(runtime);
         warmClasses();
 
@@ -765,6 +770,145 @@ public final class AgentRuntime {
     }
 
     /**
+     * {@code StringBuilder.replace(start, end, value)} — remove old ranges and insert the
+     * replacement's ranges at their new offsets.
+     */
+    public static void onBuilderReplace(
+            Object builder,
+            int lengthBefore,
+            int from,
+            int to,
+            Object replacement,
+            int replacementLength) {
+        AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
+        if (runtime == null || builder == null || !state.enter()) {
+            return;
+        }
+        try {
+            if (!runtime.governor.level().allowsDataflow()) {
+                return;
+            }
+            RequestContext context = state.context();
+            if (context == null || !context.isSampled()) {
+                return;
+            }
+            TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
+            TaintedValue builderTaint = tracker.taintOf(builder);
+            TaintedValue replacementTaint = tracker.taintOf(replacement);
+            if (!builderTaint.isTainted() && !replacementTaint.isTainted()) {
+                return;
+            }
+
+            // AbstractStringBuilder truncates end to its current length. The advice runs only
+            // after a successful call, so start and the effective end are now known-valid.
+            int effectiveTo = Math.min(to, lengthBefore);
+            tracker.track(
+                    builder,
+                    builderTaint.replace(
+                            from, effectiveTo, replacementTaint, replacementLength));
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            state.exit();
+        }
+    }
+
+    /** {@code StringBuilder.reverse()} — mirror every tracked range across the final length. */
+    public static void onBuilderReverse(Object builder, int length) {
+        AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
+        if (runtime == null || builder == null || !state.enter()) {
+            return;
+        }
+        try {
+            if (!runtime.governor.level().allowsDataflow()) {
+                return;
+            }
+            RequestContext context = state.context();
+            if (context == null || !context.isSampled()) {
+                return;
+            }
+            TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
+            TaintedValue builderTaint = tracker.taintOf(builder);
+            if (builderTaint.isTainted()) {
+                tracker.track(builder, builderTaint.reversed(length));
+            }
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            state.exit();
+        }
+    }
+
+    /**
+     * {@code String.format(...)} and {@code String.formatted(...)} reshape tainted arguments
+     * into one result whose exact offsets depend on the format directives.
+     */
+    public static void onStringFormat(String result, Object format, Object[] arguments) {
+        AgentRuntime runtime = instance;
+        ThreadState state = ThreadState.current();
+        if (runtime == null || result == null || result.isEmpty() || !state.enter()) {
+            return;
+        }
+        try {
+            if (!runtime.governor.level().allowsDataflow()) {
+                return;
+            }
+            RequestContext context = state.context();
+            if (context == null || !context.isSampled()) {
+                return;
+            }
+            TaintTracker tracker = context.tracker();
+            if (tracker.isEmpty()) {
+                return;
+            }
+
+            TaintedValue combined = tracker.taintOf(format);
+            if (arguments != null) {
+                for (Object argument : arguments) {
+                    // Offsets are deliberately artificial here and discarded by reshaped().
+                    // Using String.valueOf(argument) to calculate real widths would invoke
+                    // application toString methods twice and could change application behavior.
+                    combined = TaintedValue.concat(combined, 0, tracker.taintOf(argument));
+                }
+            }
+            if (combined.isTainted()) {
+                tracker.track(result, combined.reshaped(result.length()));
+            }
+        } catch (Throwable t) {
+            runtime.hookFailed(t);
+        } finally {
+            state.exit();
+        }
+    }
+
+    /** Decode the two static {@code String.format} overload shapes without library dependencies. */
+    public static void onStaticStringFormat(String result, Object[] invocationArguments) {
+        if (invocationArguments == null || invocationArguments.length < 2) {
+            return;
+        }
+        int formatIndex = invocationArguments[0] instanceof String ? 0 : 1;
+        if (formatIndex >= invocationArguments.length
+                || !(invocationArguments[formatIndex] instanceof String format)) {
+            return;
+        }
+        int argumentsIndex = formatIndex + 1;
+        Object[] arguments =
+                argumentsIndex < invocationArguments.length
+                                && invocationArguments[argumentsIndex] instanceof Object[] values
+                        ? values
+                        : null;
+        onStringFormat(result, format, arguments);
+    }
+
+    /**
      * Bind the current request context to a task that is about to run on another thread.
      *
      * <p>Returns the original task unchanged when there is nothing to carry, so the common
@@ -922,6 +1066,28 @@ public final class AgentRuntime {
      */
     public static java.util.Enumeration<?> onHeaderEnumeration(
             java.util.Enumeration<?> values, String name) {
+        return onSourceEnumeration(
+                values, name, dev.aegis.agent.taint.SourceKind.HEADER);
+    }
+
+    /** {@code HttpServletRequest.getHeaderNames()} — each returned name is attacker-controlled. */
+    public static java.util.Enumeration<?> onHeaderNameEnumeration(
+            java.util.Enumeration<?> names) {
+        return onSourceEnumeration(
+                names, null, dev.aegis.agent.taint.SourceKind.HEADER);
+    }
+
+    /** {@code ServletRequest.getParameterNames()} — each returned name is attacker-controlled. */
+    public static java.util.Enumeration<?> onParameterNameEnumeration(
+            java.util.Enumeration<?> names) {
+        return onSourceEnumeration(
+                names, null, dev.aegis.agent.taint.SourceKind.PARAMETER);
+    }
+
+    private static java.util.Enumeration<?> onSourceEnumeration(
+            java.util.Enumeration<?> values,
+            String name,
+            dev.aegis.agent.taint.SourceKind kind) {
         AgentRuntime runtime = instance;
         ThreadState state = ThreadState.current();
         if (runtime == null || values == null || !state.enter()) {
@@ -935,7 +1101,7 @@ public final class AgentRuntime {
             if (context == null || !context.isSampled()) {
                 return values;
             }
-            return new TaintingEnumeration(values, name);
+            return new TaintingEnumeration(values, name, kind);
         } catch (Throwable t) {
             runtime.hookFailed(t);
             return values;
@@ -949,10 +1115,15 @@ public final class AgentRuntime {
 
         private final java.util.Enumeration<?> delegate;
         private final String name;
+        private final dev.aegis.agent.taint.SourceKind kind;
 
-        TaintingEnumeration(java.util.Enumeration<?> delegate, String name) {
+        TaintingEnumeration(
+                java.util.Enumeration<?> delegate,
+                String name,
+                dev.aegis.agent.taint.SourceKind kind) {
             this.delegate = delegate;
             this.name = name;
+            this.kind = kind;
         }
 
         @Override
@@ -964,7 +1135,7 @@ public final class AgentRuntime {
         public Object nextElement() {
             Object value = delegate.nextElement();
             if (value instanceof String text) {
-                onSource(text, dev.aegis.agent.taint.SourceKind.HEADER, name);
+                onSource(text, kind, name == null ? text : name);
             }
             return value;
         }
@@ -981,14 +1152,19 @@ public final class AgentRuntime {
         if (instance == null || builder == null) {
             return;
         }
+        java.util.List<String> command;
         try {
-            for (String argument : builder.command()) {
-                // Deliberately outside the guard: onSink takes it, and it captures the stack,
-                // which has to show the application frame that started the process.
-                onSink(argument, RuleClass.COMMAND_INJECTION, "java.lang.ProcessBuilder#start()");
-            }
+            command = java.util.List.copyOf(builder.command());
         } catch (Throwable t) {
             instance.hookFailed(t);
+            return;
+        }
+        for (String argument : command) {
+            // Deliberately outside the catch: onSink contains its own fail-open boundary, while
+            // the SecurityException from an EXPLOITED finding must reach the application before
+            // ProcessBuilder starts the operating-system process.
+            onBlockingSink(
+                    argument, RuleClass.COMMAND_INJECTION, "java.lang.ProcessBuilder#start()");
         }
     }
 
@@ -1019,13 +1195,13 @@ public final class AgentRuntime {
         }
         for (Object argument : arguments) {
             if (argument instanceof String) {
-                onSink(
+                onBlockingSink(
                         argument,
                         RuleClass.REFLECTED_XSS,
                         "java.io.PrintWriter#format(String,Object...)");
             } else if (argument instanceof Object[] nested) {
                 for (Object element : nested) {
-                    onSink(
+                    onBlockingSink(
                             element,
                             RuleClass.REFLECTED_XSS,
                             "java.io.PrintWriter#format(String,Object...)");
@@ -1191,6 +1367,26 @@ public final class AgentRuntime {
     }
 
     /**
+     * Evaluate and report a string sink, then stop only a confirmed exploitation attempt.
+     *
+     * <p>This method is intentionally called from sink advice that does not suppress exceptions.
+     * {@link #onSink} contains the fail-open boundary for every internal error; the exception below
+     * is therefore a policy outcome, not an agent failure. A tainted but benign value is
+     * {@code CONFIRMED}, not {@code EXPLOITED}, and is never blocked.
+     */
+    public static void onBlockingSink(Object argument, RuleClass rule, String sinkSignature) {
+        Finding finding = onSink(argument, rule, sinkSignature);
+        AgentRuntime runtime = instance;
+        if (runtime != null
+                && runtime.blockingEnabled
+                && finding != null
+                && finding.confidence() == Finding.Confidence.EXPLOITED) {
+            throw new SecurityException(
+                    "Aegis blocked confirmed " + finding.rule().key() + " exploitation");
+        }
+    }
+
+    /**
      * A sink whose dangerous argument is not a string.
      *
      * <p>Deserialization is the case that needs this: what reaches
@@ -1320,7 +1516,8 @@ public final class AgentRuntime {
         if (isResponse) {
             // Outside the guard: onSink takes it again, and it also captures the stack, which
             // must show the application frame that wrote — not this method.
-            onSink(value, RuleClass.REFLECTED_XSS, "jakarta.servlet.ServletResponse#getWriter");
+            onBlockingSink(
+                    value, RuleClass.REFLECTED_XSS, "jakarta.servlet.ServletResponse#getWriter");
         }
     }
 

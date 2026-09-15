@@ -73,7 +73,11 @@ class TestAuthentication:
         )
         forged = await client.post(
             INGEST,
-            headers={"Authorization": f"Bearer {make_agent_token(secret='another-secret-value')}"},
+            headers={
+                "Authorization": (
+                    f"Bearer {make_agent_token(secret='another-secret-value-long-enough')}"
+                )
+            },
             content=ndjson(taint_hit()),
         )
         # Telling an attacker which check they still need to pass is free help.

@@ -98,6 +98,18 @@ public final class BenchmarkApp {
         register("/sql/plus", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
         register("/sql/concat", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
         register("/sql/substring", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
+        register("/sql/builder-replace", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
+        register("/sql/builder-reverse", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
+        register("/sql/format", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
+        register("/sql/formatted", Expectation.VULNERABLE, "sql-injection", SQL_PAYLOAD);
+        // A real tainted flow with a benign payload. Detection should report CONFIRMED, while
+        // blocking must let the query execute because exploitation was not confirmed.
+        register("/sql/confirmed", Expectation.VULNERABLE, "sql-injection", "alice");
+        register("/sql/builder-replace-clears", Expectation.SAFE, "", SQL_PAYLOAD);
+        register("/sql/builder-reverse-constant", Expectation.SAFE, "", SQL_PAYLOAD);
+        register("/sql/format-constant", Expectation.SAFE, "", SQL_PAYLOAD);
+        register("/sql/formatted-constant", Expectation.SAFE, "", SQL_PAYLOAD);
+        register("/sql/confirmed-constant", Expectation.SAFE, "", "alice");
         register("/sql/prepared", Expectation.SAFE, "", SQL_PAYLOAD);
         register("/sql/constant", Expectation.SAFE, "", SQL_PAYLOAD);
         register("/sql/identity", Expectation.SAFE, "", "alice");
@@ -133,6 +145,18 @@ public final class BenchmarkApp {
         // --- Header injection -------------------------------------------------------------
         register("/header/set", Expectation.VULNERABLE, "header-injection", XSS_PAYLOAD);
         register("/header/constant", Expectation.SAFE, "", XSS_PAYLOAD);
+        register(
+                "/header/name-to-sql",
+                Expectation.VULNERABLE,
+                "sql-injection",
+                "X-Aegis-Probe");
+        register("/header/name-constant", Expectation.SAFE, "", "X-Aegis-Probe");
+        register(
+                "/parameter/name-to-sql",
+                Expectation.VULNERABLE,
+                "sql-injection",
+                "X-Aegis-Parameter");
+        register("/parameter/name-constant", Expectation.SAFE, "", "X-Aegis-Parameter");
 
         // --- Server-side request forgery --------------------------------------------------
         register("/ssrf/url", Expectation.VULNERABLE, "ssrf", "evil.example.com");
@@ -227,6 +251,11 @@ public final class BenchmarkApp {
                 String body =
                         path.startsWith("/cookie/")
                                 ? get(port, path, "name=" + payload)
+                                : path.startsWith("/header/name-")
+                                        ? getWithHeaderName(
+                                                port, path + "?name=ignored", payload)
+                                : path.startsWith("/parameter/name-")
+                                        ? getWithParameterName(port, path, payload)
                                 : path.startsWith("/body/")
                                         ? post(port, path, payload)
                                         : get(port, path + "?name=" + payload, null);
@@ -273,6 +302,41 @@ public final class BenchmarkApp {
                         .followRedirects(HttpClient.Redirect.NEVER)
                         .build()
                         .send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        return response.statusCode() + ":" + response.body().trim();
+    }
+
+    private static String getWithHeaderName(int port, String path, String headerName)
+            throws Exception {
+        HttpRequest request =
+                HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
+                        .header(headerName, "present")
+                        .GET()
+                        .build();
+        HttpResponse<String> response =
+                HttpClient.newBuilder()
+                        .build()
+                        .send(request, HttpResponse.BodyHandlers.ofString());
+        return response.statusCode() + ":" + response.body().trim();
+    }
+
+    private static String getWithParameterName(int port, String path, String parameterName)
+            throws Exception {
+        String encodedName = URLEncoder.encode(parameterName, StandardCharsets.UTF_8);
+        HttpRequest request =
+                HttpRequest.newBuilder(
+                                URI.create(
+                                        "http://127.0.0.1:"
+                                                + port
+                                                + path
+                                                + "?"
+                                                + encodedName
+                                                + "=selected"))
+                        .GET()
+                        .build();
+        HttpResponse<String> response =
+                HttpClient.newBuilder()
+                        .build()
+                        .send(request, HttpResponse.BodyHandlers.ofString());
         return response.statusCode() + ":" + response.body().trim();
     }
 
@@ -329,6 +393,16 @@ public final class BenchmarkApp {
                 case "/sql/plus" -> sqlPlus(name);
                 case "/sql/concat" -> sqlConcat(name);
                 case "/sql/substring" -> sqlSubstring(name);
+                case "/sql/builder-replace" -> sqlBuilderReplace(name);
+                case "/sql/builder-reverse" -> sqlBuilderReverse(name);
+                case "/sql/format" -> sqlFormat(name);
+                case "/sql/formatted" -> sqlFormatted(name);
+                case "/sql/confirmed" -> sqlPlus(name);
+                case "/sql/builder-replace-clears" -> sqlBuilderReplaceClears(name);
+                case "/sql/builder-reverse-constant" -> sqlBuilderReverseConstant(name);
+                case "/sql/format-constant" -> sqlFormatConstant(name);
+                case "/sql/formatted-constant" -> sqlFormattedConstant(name);
+                case "/sql/confirmed-constant" -> sqlConstant(name);
                 case "/sql/prepared" -> sqlPrepared(name);
                 case "/sql/constant" -> sqlConstant(name);
                 case "/sql/identity" -> sqlIdentity(name);
@@ -345,6 +419,10 @@ public final class BenchmarkApp {
                 case "/redirect/encoded" -> redirectEncoded(name, response);
                 case "/header/set" -> headerFromInput(name, response);
                 case "/header/constant" -> headerConstant(name, response);
+                case "/header/name-to-sql" -> headerNameToSql(request);
+                case "/header/name-constant" -> headerNameConstant(request);
+                case "/parameter/name-to-sql" -> parameterNameToSql(request);
+                case "/parameter/name-constant" -> parameterNameConstant(request);
                 case "/ssrf/url" -> ssrfFromInput(name);
                 case "/ssrf/constant" -> ssrfConstant(name);
                 case "/ldap/search" -> ldapFromInput(name);
@@ -403,6 +481,58 @@ public final class BenchmarkApp {
             StringBuilder sql = new StringBuilder("SELECT name FROM users WHERE name = '''");
             sql.append(name.substring(1)).append("'");
             return query(sql.toString());
+        }
+
+        /** The OWASP Benchmark shape that substitutes a parameter into an existing builder. */
+        private String sqlBuilderReplace(String name) throws Exception {
+            String prefix = "SELECT name FROM users WHERE name = '";
+            String placeholder = "placeholder";
+            StringBuilder sql = new StringBuilder(prefix).append(placeholder).append("'");
+            sql.replace(prefix.length(), prefix.length() + placeholder.length(), name);
+            return query(sql.toString());
+        }
+
+        /** Reversal must move the range, not detach the parameter from its provenance. */
+        private String sqlBuilderReverse(String name) throws Exception {
+            StringBuilder value = new StringBuilder().append(name).reverse().reverse();
+            StringBuilder sql = new StringBuilder("SELECT name FROM users WHERE name = '");
+            sql.append(value).append("'");
+            return query(sql.toString());
+        }
+
+        private String sqlFormat(String name) throws Exception {
+            return query(String.format("SELECT name FROM users WHERE name = '%s'", name));
+        }
+
+        private String sqlFormatted(String name) throws Exception {
+            return query("SELECT name FROM users WHERE name = '%s'".formatted(name));
+        }
+
+        /** Removing the only tainted range must remove the builder's side-table entry too. */
+        private String sqlBuilderReplaceClears(String name) throws Exception {
+            String prefix = "SELECT name FROM users WHERE name = '";
+            StringBuilder sql = new StringBuilder(prefix).append(name).append("'");
+            sql.replace(prefix.length(), prefix.length() + name.length(), "alice");
+            return query(sql.toString());
+        }
+
+        private String sqlBuilderReverseConstant(String name) throws Exception {
+            StringBuilder value = new StringBuilder("alice").reverse().reverse();
+            return query("SELECT name FROM users WHERE name = '" + value + "'")
+                    + ":"
+                    + name.length();
+        }
+
+        private String sqlFormatConstant(String name) throws Exception {
+            return query(String.format("SELECT name FROM users WHERE name = '%s'", "alice"))
+                    + ":"
+                    + name.length();
+        }
+
+        private String sqlFormattedConstant(String name) throws Exception {
+            return query("SELECT name FROM users WHERE name = '%s'".formatted("alice"))
+                    + ":"
+                    + name.length();
         }
 
         private String sqlPrepared(String name) throws Exception {
@@ -613,6 +743,51 @@ public final class BenchmarkApp {
         private String headerConstant(String name, HttpServletResponse response) {
             response.setHeader("X-Echo", "constant");
             return "set:" + name.length();
+        }
+
+        private String headerNameToSql(HttpServletRequest request) throws Exception {
+            String selected = "missing";
+            java.util.Enumeration<String> names = request.getHeaderNames();
+            while (names.hasMoreElements()) {
+                String candidate = names.nextElement();
+                if (candidate.equalsIgnoreCase("X-Aegis-Probe")) {
+                    selected = candidate;
+                }
+            }
+            return query("SELECT name FROM users WHERE name = '" + selected + "'");
+        }
+
+        private String headerNameConstant(HttpServletRequest request) throws Exception {
+            int seen = 0;
+            java.util.Enumeration<String> names = request.getHeaderNames();
+            while (names.hasMoreElements()) {
+                names.nextElement();
+                seen++;
+            }
+            return query("SELECT name FROM users WHERE id = 1") + ":" + seen;
+        }
+
+        private String parameterNameToSql(HttpServletRequest request) throws Exception {
+            String selected = "missing";
+            java.util.Enumeration<String> names = request.getParameterNames();
+            while (names.hasMoreElements()) {
+                String candidate = names.nextElement();
+                String[] values = request.getParameterValues(candidate);
+                if (values != null && values.length > 0 && values[0].equals("selected")) {
+                    selected = candidate;
+                }
+            }
+            return query("SELECT name FROM users WHERE name = '" + selected + "'");
+        }
+
+        private String parameterNameConstant(HttpServletRequest request) throws Exception {
+            int seen = 0;
+            java.util.Enumeration<String> names = request.getParameterNames();
+            while (names.hasMoreElements()) {
+                names.nextElement();
+                seen++;
+            }
+            return query("SELECT name FROM users WHERE id = 1") + ":" + seen;
         }
 
         // --- SSRF ---------------------------------------------------------------------

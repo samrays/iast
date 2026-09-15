@@ -170,6 +170,84 @@ public final class TaintedValue {
     }
 
     /**
+     * Replace {@code [from, to)} with a new value, as {@code StringBuilder.replace} does.
+     *
+     * <p>Ranges before the replaced window stay put, ranges after it shift by the length
+     * delta, and taint inside the removed window disappears. The replacement's own ranges
+     * are then rebased to {@code from}. This is deliberately exact: retaining removed taint
+     * produces false positives, while dropping the replacement taint misses the vulnerability.
+     */
+    public TaintedValue replace(
+            int from, int to, TaintedValue replacement, int replacementLength) {
+        if (from < 0 || to < from || replacementLength < 0) {
+            throw new IllegalArgumentException("invalid replacement bounds");
+        }
+        if (!isTainted() && !replacement.isTainted()) {
+            return EMPTY;
+        }
+
+        int delta = replacementLength - (to - from);
+        List<TaintRange> result = new ArrayList<>();
+        for (TaintRange range : ranges) {
+            if (range.end() <= from) {
+                result.add(range);
+                continue;
+            }
+            if (range.start() >= to) {
+                result.add(range.shift(delta));
+                continue;
+            }
+
+            // The replaced window overlaps this range. Preserve only the portions outside it.
+            if (range.start() < from) {
+                result.add(
+                        new TaintRange(
+                                range.start(),
+                                from - range.start(),
+                                range.source(),
+                                range.sourceName(),
+                                range.clearedFor()));
+            }
+            if (range.end() > to) {
+                result.add(
+                        new TaintRange(
+                                from + replacementLength,
+                                range.end() - to,
+                                range.source(),
+                                range.sourceName(),
+                                range.clearedFor()));
+            }
+        }
+        for (TaintRange range : replacement.ranges) {
+            result.add(range.shift(from));
+        }
+        return normalize(result, imprecise || replacement.imprecise);
+    }
+
+    /** Mirror every range across a value of {@code length}, as {@code reverse()} does. */
+    public TaintedValue reversed(int length) {
+        if (!isTainted() || length <= 0) {
+            return EMPTY;
+        }
+        List<TaintRange> result = new ArrayList<>(ranges.size());
+        for (TaintRange range : ranges) {
+            if (range.end() > length) {
+                // Stale or approximate offsets must not become negative. Keep the provenance
+                // honestly imprecise instead of silently losing it or breaking the application.
+                return reshaped(length);
+            }
+            result.add(
+                    new TaintRange(
+                            length - range.end(),
+                            range.length(),
+                            range.source(),
+                            range.sourceName(),
+                            range.clearedFor()));
+        }
+        return normalize(result, imprecise);
+    }
+
+    /**
      * Case folding, trimming to the same length, and similar length-preserving transforms.
      * Offsets are unchanged, so this is identity on the range set — but it exists as a named
      * operation because a propagator that silently dropped taint here would be a real bug.

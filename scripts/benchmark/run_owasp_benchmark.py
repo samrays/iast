@@ -46,16 +46,8 @@ RULE_TO_CATEGORY = {
 IN_SCOPE = set(RULE_TO_CATEGORY.values())
 
 
-def drive(crawler_xml: Path, base_url: str, timeout: float) -> int:
-    """Issue every Benchmark request. Failures are counted, not fatal."""
-    tests = ET.parse(crawler_xml).getroot().findall("benchmarkTest")
-
-    # The Benchmark ships a self-signed certificate. Verification is deliberately disabled: the
-    # endpoint is localhost, chosen by us, and refusing to talk to it proves nothing.
-    context = ssl.create_default_context()
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
-
+def _build_request(test: ET.Element, base_url: str) -> urllib.request.Request:
+    """Build one request with the same method rules as BenchmarkUtils' official crawler."""
     # Each test's URL in the crawler XML is already absolute, context path included
     # (https://host:port/benchmark/sqli-00/BenchmarkTestNNNNN). base_url exists only to let the
     # caller point at a different host/port than the one baked into the XML — it must replace
@@ -66,30 +58,45 @@ def drive(crawler_xml: Path, base_url: str, timeout: float) -> int:
     # cost hours to diagnose here: routes still logged (Tomcat's 404 handler is a servlet too),
     # every taint hit silently absent.
     base = urllib.parse.urlsplit(base_url)
+    url = test.get("URL", "")
+    test_url = urllib.parse.urlsplit(url)
+    target = urllib.parse.urlunsplit((base.scheme, base.netloc, test_url.path, "", ""))
+
+    form = {c.get("name"): c.get("value") for c in test.findall("formparam")}
+    query = {c.get("name"): c.get("value") for c in test.findall("getparam")}
+    headers = {c.get("name"): c.get("value") for c in test.findall("header")}
+    cookies = [
+        f"{c.get('name')}={urllib.parse.quote(c.get('value', ''), safe='')}"
+        for c in test.findall("cookie")
+    ]
+    if cookies:
+        headers["Cookie"] = "; ".join(cookies)
+
+    headers["Content-Type"] = "application/x-www-form-urlencoded"
+    if query:
+        target = f"{target}?{urllib.parse.urlencode(query)}"
+        data = None  # The official crawler uses GET only when query parameters exist.
+    else:
+        # An empty bytestring is intentional: urllib otherwise silently changes the official
+        # crawler's POST-with-no-form-body request into GET, bypassing many servlet doPost paths.
+        data = urllib.parse.urlencode(form).encode()
+    return urllib.request.Request(target, data=data, headers=headers)
+
+
+def drive(crawler_xml: Path, base_url: str, timeout: float) -> int:
+    """Issue every Benchmark request. Failures are counted, not fatal."""
+    tests = ET.parse(crawler_xml).getroot().findall("benchmarkTest")
+
+    # The Benchmark ships a self-signed certificate. Verification is deliberately disabled: the
+    # endpoint is localhost, chosen by us, and refusing to talk to it proves nothing.
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
 
     failures = 0
     not_found = 0
     for index, test in enumerate(tests, start=1):
-        url = test.get("URL", "")
-        test_url = urllib.parse.urlsplit(url)
-        target = urllib.parse.urlunsplit((base.scheme, base.netloc, test_url.path, "", ""))
-
-        form = {c.get("name"): c.get("value") for c in test.findall("formparam")}
-        query = {c.get("name"): c.get("value") for c in test.findall("getparam")}
-        headers = {c.get("name"): c.get("value") for c in test.findall("header")}
-        cookies = [f"{c.get('name')}={c.get('value')}" for c in test.findall("cookie")]
-        if cookies:
-            headers["Cookie"] = "; ".join(cookies)
-
-        if query:
-            target = f"{target}?{urllib.parse.urlencode(query)}"
-
-        data = None
-        if form:
-            data = urllib.parse.urlencode(form).encode()
-            headers["Content-Type"] = "application/x-www-form-urlencoded"
-
-        request = urllib.request.Request(target, data=data, headers=headers)
+        request = _build_request(test, base_url)
         try:
             with urllib.request.urlopen(request, timeout=timeout, context=context):
                 pass

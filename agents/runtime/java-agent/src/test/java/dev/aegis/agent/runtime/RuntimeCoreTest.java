@@ -74,6 +74,18 @@ class RuntimeCoreTest {
         }
 
         @Test
+        void removesStaleTaintWhenAMutableCarrierBecomesClean() {
+            TaintTracker tracker = new TaintTracker();
+            StringBuilder carrier = new StringBuilder("payload");
+            tracker.track(carrier, TaintedValue.fullyTainted(7, SourceKind.PARAMETER, "q"));
+
+            tracker.track(carrier, TaintedValue.empty());
+
+            assertFalse(tracker.isTainted(carrier));
+            assertEquals(0, tracker.size());
+        }
+
+        @Test
         void clearReleasesEverything() {
             TaintTracker tracker = new TaintTracker(2);
             tracker.trackSource(new String("a"), SourceKind.PARAMETER, "q");

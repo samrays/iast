@@ -126,11 +126,11 @@ public interface Transport {
                 // Drain the body so the connection can be pooled rather than torn down.
                 drainQuietly(connection);
 
-                if (status == 400 || status == 401 || status == 403 || status == 413) {
-                    // A rejection the agent cannot fix by waiting: a malformed batch, an
-                    // expired credential, an oversized payload. Retrying forever would spool
-                    // the same doomed bytes until the ceiling evicted real findings, so this
-                    // counts as delivered and is dropped.
+                if (status == 400 || status == 413) {
+                    // The bytes themselves are invalid or too large, so retrying them cannot
+                    // succeed. Authentication failures are deliberately excluded: credentials
+                    // can be renewed or corrected, and losing a confirmed finding during that
+                    // window would make a control-plane outage look like a clean application.
                     return true;
                 }
                 return status / 100 == 2;

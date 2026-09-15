@@ -50,7 +50,13 @@ public final class TaintTracker {
      * that {@link #taintOf} cannot answer by returning empty.
      */
     public void track(Object value, TaintedValue taint) {
-        if (value == null || taint == null || !taint.isTainted()) {
+        if (value == null) {
+            return;
+        }
+        if (taint == null || !taint.isTainted()) {
+            // Mutable carriers such as StringBuilder can lose their last tainted range after
+            // replace/delete. Leaving the old entry behind would report a clean value later.
+            table.remove(value);
             return;
         }
         if (table.size() >= capacity && !table.containsKey(value)) {

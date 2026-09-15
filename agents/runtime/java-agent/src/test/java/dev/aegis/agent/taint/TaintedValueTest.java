@@ -150,6 +150,68 @@ class TaintedValueTest {
     }
 
     @Nested
+    @DisplayName("replacement")
+    class Replacement {
+
+        @Test
+        void dropsRemovedTaintAndShiftsTheRemainingTail() {
+            TaintedValue original = param(10, "q");
+
+            TaintedValue result = original.replace(2, 7, TaintedValue.empty(), 1);
+
+            assertEquals(2, result.rangeCount());
+            assertEquals(0, result.ranges().get(0).start());
+            assertEquals(2, result.ranges().get(0).length());
+            assertEquals(3, result.ranges().get(1).start());
+            assertEquals(3, result.ranges().get(1).length());
+        }
+
+        @Test
+        void insertsTheReplacementTaintAtTheRequestedOffset() {
+            TaintedValue original =
+                    TaintedValue.concat(TaintedValue.empty(), 8, param(3, "tail"));
+
+            TaintedValue result = original.replace(2, 5, param(4, "replacement"), 4);
+
+            assertEquals(2, result.rangeCount());
+            assertEquals(2, result.ranges().get(0).start());
+            assertEquals(4, result.ranges().get(0).length());
+            assertEquals(9, result.ranges().get(1).start());
+        }
+
+        @Test
+        void replacingTheOnlyTaintedRangeWithAConstantMakesTheValueClean() {
+            assertFalse(param(5, "q").replace(0, 5, TaintedValue.empty(), 8).isTainted());
+        }
+    }
+
+    @Nested
+    @DisplayName("reverse")
+    class Reverse {
+
+        @Test
+        void mirrorsRangesAcrossTheValueLength() {
+            TaintedValue value = TaintedValue.concat(TaintedValue.empty(), 7, param(3, "q"));
+
+            TaintedValue result = value.reversed(12);
+
+            assertEquals(1, result.rangeCount());
+            assertEquals(2, result.ranges().get(0).start());
+            assertEquals(3, result.ranges().get(0).length());
+        }
+
+        @Test
+        void reversingTwiceRestoresTheOriginalOffsets() {
+            TaintedValue value = TaintedValue.concat(TaintedValue.empty(), 7, param(3, "q"));
+
+            TaintedValue result = value.reversed(12).reversed(12);
+
+            assertEquals(7, result.ranges().get(0).start());
+            assertEquals(3, result.ranges().get(0).length());
+        }
+    }
+
+    @Nested
     @DisplayName("sanitization")
     class Sanitization {
 

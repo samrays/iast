@@ -36,15 +36,13 @@ distinguished from probing.
 apps/
   api/          FastAPI control plane — auth, RBAC, inventory, findings, policy    [Phase 2 ✅]
   gateway/      High-throughput agent ingest — auth, quota, fan-out to Kafka       [Phase 4 ✅]
-  worker/       (not yet created — see the note below)                             [Phase 6]
+  worker/       Stream consumer — folds gateway events into durable findings       [Phase 5 🚧]
   dashboard/    Next.js 15 console — inventory, fleet, RBAC, audit                 [Phase 3 ✅]
 
-The findings pipeline lives in `apps/api` as `aegis_api.application.findings`, driven by
-`aegis-api process-events`, rather than in `apps/worker`. It needs the same domain entities,
-repositories, unit of work and RLS binding as the control plane, and duplicating those across
-a process boundary would cost more than it buys while there is one consumer. Running it as a
-separate process is a deployment choice the CLI already allows. `apps/worker` gets created
-when there is a second consumer — the AI pipelines in Phase 6 — and Celery with it.
+The findings domain and persistence remain in `apps/api`; `apps/worker` installs that package and
+runs the stream fold continuously. It supports the gateway's file sink for local development and
+Kafka for deployed environments, committing its cursor or consumer offset only after a batch is
+durably stored.
 
 agents/runtime/
   java-agent/   JVM agent — bytecode instrumentation (Byte Buddy)                  [Phase 4 🚧]
@@ -132,6 +130,40 @@ make run
 OpenAPI docs are then at `http://localhost:8080/docs`, liveness at `/healthz`, readiness at `/readyz`,
 Prometheus metrics at `/metrics`.
 
+### Running the complete findings pipeline
+
+A finding reaches the console through three processes: the API issues the agent credential, the
+gateway accepts and durably streams the event, and the worker folds that event into PostgreSQL. Run
+all three from the repository root. The API and gateway must receive the same signing secret; generate
+one local value and export it to both names before starting them:
+
+```bash
+export AEGIS_JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+export AEGIS_GATEWAY_JWT_SECRET="$AEGIS_JWT_SECRET"
+```
+
+Then use three terminals that inherit those variables:
+
+```bash
+make run
+make run-gateway
+make run-worker
+```
+
+The gateway and worker defaults both use `.local-data/aegis-events.ndjson`, so local findings are
+never acknowledged into volatile memory. Production deployments use the same pipeline with Kafka.
+
+After building the Java agent with `mvn verify`, the demo command registers a short-lived agent, runs
+the deliberately vulnerable application, and fails unless the worker-created occurrence is readable
+from the control-plane findings API:
+
+```bash
+make demo-vulnerable
+```
+
+The command prompts for the dashboard password without putting it in the process list. Non-interactive
+runs may provide it through `AEGIS_DEMO_PASSWORD`.
+
 Run the test suite (unit, integration and security; gate is 90% coverage):
 
 ```bash
@@ -145,6 +177,8 @@ make check
 ```
 
 ### Running the console
+
+Prerequisite: Node.js 24+ and npm 11+.
 
 ```bash
 npm install

@@ -6,7 +6,14 @@ from typing import Any
 
 import httpx
 import pytest
-from tests.conftest import ISSUER, JWT_SECRET, make_agent_token, ndjson, route_event, taint_hit
+from tests.conftest import (
+    ISSUER,
+    JWT_SECRET,
+    make_agent_token,
+    ndjson,
+    route_event,
+    taint_hit,
+)
 
 from aegis_gateway.application.context import AgentPrincipal
 from aegis_gateway.application.ingest import IngestEvents, summarize_types
@@ -64,6 +71,12 @@ class TestProductionGuards:
         # A fresh clone must run without ceremony.
         settings = Settings(environment=Environment.LOCAL, jwt_secret="")
         assert len(settings.jwt_secret) > 32
+
+    def test_local_default_feeds_the_workers_durable_stream(self) -> None:
+        settings = Settings(
+            environment=Environment.LOCAL, jwt_secret="local-test-secret"
+        )
+        assert settings.event_sink == "file:.local-data/aegis-events.ndjson"
 
 
 class TestAuthenticatorEdges:
@@ -131,7 +144,9 @@ class TestStrictMode:
         # Useful when developing an agent, where silence about a schema bug is worse than
         # losing the batch.
         with pytest.raises(InvalidEventError):
-            await ingest.execute(AgentPrincipal(agent_id="a", organization_id="o"), body)
+            await ingest.execute(
+                AgentPrincipal(agent_id="a", organization_id="o"), body
+            )
 
     async def test_stops_reading_past_the_declared_event_limit(self) -> None:
         sink = MemoryEventSink()
@@ -144,7 +159,9 @@ class TestStrictMode:
         )
         body = ndjson(*[taint_hit() for _ in range(10)])
 
-        result = await ingest.execute(AgentPrincipal(agent_id="a", organization_id="o"), body)
+        result = await ingest.execute(
+            AgentPrincipal(agent_id="a", organization_id="o"), body
+        )
 
         # One request must not be able to consume unbounded CPU.
         assert result.accepted <= 3
@@ -158,7 +175,9 @@ class TestStrictMode:
             max_batch_bytes=1_000,
             max_batch_events=10,
         )
-        result = await ingest.execute(AgentPrincipal(agent_id="a", organization_id="o"), b"\n\n")
+        result = await ingest.execute(
+            AgentPrincipal(agent_id="a", organization_id="o"), b"\n\n"
+        )
         assert result.accepted == 0
         assert result.credit >= 1
 
@@ -170,6 +189,47 @@ class TestSinkSelection:
         pytest.importorskip("aiokafka")
         sink = build_sink("kafka://localhost:9092/custom-topic")
         assert sink._topic == "custom-topic"  # type: ignore[attr-defined]
+        assert sink._producer is None  # type: ignore[attr-defined]
+
+    async def test_kafka_producer_is_created_inside_the_running_loop(self) -> None:
+        pytest.importorskip("aiokafka")
+        sink = build_sink("kafka://localhost:9092/custom-topic")
+
+        class FakeProducer:
+            def __init__(self, **options: Any) -> None:
+                self.options = options
+                self.started = False
+                self.stopped = False
+
+            async def start(self) -> None:
+                self.started = True
+
+            async def stop(self) -> None:
+                self.stopped = True
+
+        sink._producer_type = FakeProducer  # type: ignore[attr-defined]
+        await sink.start()  # type: ignore[attr-defined]
+
+        producer = sink._producer  # type: ignore[attr-defined]
+        assert producer.started
+        assert producer.options["bootstrap_servers"] == "localhost:9092"
+        await sink.close()  # type: ignore[attr-defined]
+        assert producer.stopped
+
+    @pytest.mark.parametrize(
+        "destination, message",
+        [
+            ("kafak://broker:9092/runtime-events", "Unsupported event sink"),
+            ("kafka:///runtime-events", "bootstrap server"),
+            ("file:", "requires a path"),
+            ("memory://typo", "Unsupported event sink"),
+        ],
+    )
+    def test_invalid_sink_configuration_fails_closed(
+        self, destination: str, message: str
+    ) -> None:
+        with pytest.raises(ValueError, match=message):
+            build_sink(destination)
 
     def test_kafka_without_the_extra_reports_a_clear_installation_error(
         self, monkeypatch: pytest.MonkeyPatch
