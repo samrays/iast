@@ -26,6 +26,7 @@ from .entities import (
     Session,
     User,
 )
+from .entities.ai import AiAnalysis
 from .entities.findings import Finding, Occurrence
 from .entities.rules import RuleBundle, TenantRuleSettings
 from .value_objects import ApiKeyPrefix, EmailAddress, Slug, TokenHash
@@ -401,6 +402,19 @@ class FindingRepository(Protocol):
     async def list_comments(self, finding_id: UUID) -> list[dict[str, Any]]: ...
 
 
+@runtime_checkable
+class AiAnalysisRepository(TenantScoped, Protocol):
+    """AI analyses generated for findings."""
+
+    async def add(self, analysis: AiAnalysis) -> AiAnalysis: ...
+
+    async def get(self, analysis_id: UUID) -> AiAnalysis | None: ...
+
+    async def list_for_finding(self, finding_id: UUID) -> list[AiAnalysis]: ...
+
+    async def update(self, analysis: AiAnalysis) -> AiAnalysis: ...
+
+
 class RuleSettingsRepository(Protocol):
     """One organization's rule opt-outs.
 
@@ -470,6 +484,11 @@ class UnitOfWork(Protocol):
 
     @property
     def rule_settings(self) -> RuleSettingsRepository:
+        """Available only after ``bind_tenant``."""
+        ...
+
+    @property
+    def ai_analyses(self) -> AiAnalysisRepository:
         """Available only after ``bind_tenant``."""
         ...
 

@@ -37,11 +37,13 @@ from ...domain.entities import (
     User,
     UserStatus,
 )
+from ...domain.entities.ai import AiAnalysis, AnalysisKind, AnalysisStatus
 from ...domain.entities.rules import TenantRuleSettings
 from ...domain.permissions import Permission
 from ...domain.value_objects import ApiKeyPrefix, EmailAddress, PasswordHash, Slug, TokenHash
 from .models import (
     AgentRecord,
+    AiAnalysisRecord,
     ApiKeyRecord,
     ApplicationEnvironmentRecord,
     ApplicationRecord,
@@ -726,4 +728,48 @@ def rule_settings_to_record(entity: TenantRuleSettings) -> TenantRuleSettingsRec
         id=entity.id,
         organization_id=entity.organization_id,
         disabled=dict(entity.disabled),
+    )
+
+
+# --- AI Analysis --------------------------------------------------------------------
+
+
+def ai_analysis_to_domain(record: AiAnalysisRecord) -> AiAnalysis:
+    return AiAnalysis(
+        id=record.id,
+        organization_id=record.organization_id,
+        finding_id=record.finding_id,
+        kind=AnalysisKind(record.kind),
+        summary=record.summary,
+        content=record.content,
+        status=AnalysisStatus(record.status),
+        model=record.model,
+        prompt_hash=record.prompt_hash,
+        input_tokens=record.input_tokens,
+        output_tokens=record.output_tokens,
+        reviewed_by=record.reviewed_by,
+        review_note=record.review_note,
+        failure_reason=record.failure_reason,
+        created_at=record.created_at,
+        reviewed_at=record.reviewed_at,
+    )
+
+
+def ai_analysis_to_record(entity: AiAnalysis) -> AiAnalysisRecord:
+    return AiAnalysisRecord(
+        id=entity.id,
+        organization_id=entity.organization_id,
+        finding_id=entity.finding_id,
+        kind=entity.kind.value,
+        summary=entity.summary,
+        content=entity.content,
+        status=entity.status.value,
+        model=entity.model,
+        prompt_hash=entity.prompt_hash,
+        input_tokens=entity.input_tokens,
+        output_tokens=entity.output_tokens,
+        reviewed_by=entity.reviewed_by,
+        review_note=entity.review_note,
+        failure_reason=entity.failure_reason,
+        reviewed_at=entity.reviewed_at,
     )

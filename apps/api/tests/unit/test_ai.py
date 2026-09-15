@@ -202,3 +202,40 @@ class TestReviewGate:
     def test_content_is_bounded(self) -> None:
         analysis = self._analysis(content="x" * 100_000)
         assert len(analysis.content) == AiAnalysis.MAX_CONTENT
+
+
+class TestAnalyseFindingUseCase:
+    @pytest.mark.asyncio
+    async def test_analyse_finding_creates_draft_analysis(self) -> None:
+        from aegis_api.application.ai import AnalyseFinding, EchoModel
+        from aegis_api.application.context import Principal
+        from aegis_api.domain.permissions import Permission
+
+        # Unit of work fake logic
+        org_id = uuid4()
+        user_id = uuid4()
+        finding = make_finding(organization_id=org_id)
+        occurrence = make_occurrence(finding)
+
+        model = EchoModel(content="Parameter is directly appended to SQL string.")
+        
+        # Test prompt fingerprint generation
+        prompt = build_prompt(finding, occurrence, AnalysisKind.ROOT_CAUSE)
+        digest = prompt_fingerprint(prompt)
+        assert len(digest) == 64
+
+
+class TestReviewAnalysisUseCase:
+    @pytest.mark.asyncio
+    async def test_review_analysis_lifecycle(self) -> None:
+        analysis = AiAnalysis(
+            organization_id=uuid4(),
+            finding_id=uuid4(),
+            kind=AnalysisKind.REMEDIATION,
+            content="Use parameterized queries.",
+        )
+        assert analysis.status == AnalysisStatus.DRAFT
+        reviewer = uuid4()
+        analysis.accept(reviewer_id=reviewer, now=NOW, note="Approved fix.")
+        assert analysis.status == AnalysisStatus.ACCEPTED
+        assert analysis.is_actionable

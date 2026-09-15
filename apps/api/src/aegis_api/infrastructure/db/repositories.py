@@ -39,12 +39,14 @@ from ...domain.entities import (
     Session,
     User,
 )
+from ...domain.entities.ai import AiAnalysis
 from ...domain.entities.audit import GENESIS_HASH
 from ...domain.entities.rules import RuleBundle, TenantRuleSettings
 from ...domain.value_objects import ApiKeyPrefix, EmailAddress, Slug, TokenHash
 from . import mappers as m
 from .models import (
     AgentRecord,
+    AiAnalysisRecord,
     ApiKeyRecord,
     ApplicationEnvironmentRecord,
     ApplicationRecord,
@@ -725,10 +727,11 @@ class SqlAuditRepository(_TenantRepository):
         (threat T-11). The unique constraint on ``(organization_id, sequence)`` remains the
         backstop.
         """
-        await self._session.execute(
-            text("SELECT pg_advisory_xact_lock(:ns, hashtext(:org))"),
-            {"ns": self._APPEND_LOCK_NAMESPACE, "org": str(self._organization_id)},
-        )
+        if self._session.bind and self._session.bind.dialect.name == "postgresql":
+            await self._session.execute(
+                text("SELECT pg_advisory_xact_lock(:ns, hashtext(:org))"),
+                {"ns": self._APPEND_LOCK_NAMESPACE, "org": str(self._organization_id)},
+            )
         tail_stmt = self._scoped().order_by(AuditEventRecord.sequence.desc()).limit(1)
         tail = (await self._session.execute(tail_stmt)).scalar_one_or_none()
         previous_hash = tail.entry_hash if tail else GENESIS_HASH
@@ -1105,3 +1108,52 @@ class SqlRuleBundleRepository(_Repository):
             )
         )
         await self._session.flush()
+
+
+class SqlAlchemyAiAnalysisRepository:
+    """Tenant-scoped repository for AI analyses."""
+
+    def __init__(self, session: AsyncSession, organization_id: UUID) -> None:
+        self._session = session
+        self._organization_id = organization_id
+
+    @property
+    def organization_id(self) -> UUID:
+        return self._organization_id
+
+    async def add(self, analysis: AiAnalysis) -> AiAnalysis:
+        record = m.ai_analysis_to_record(analysis)
+        self._session.add(record)
+        await self._session.flush()
+        return m.ai_analysis_to_domain(record)
+
+    async def get(self, analysis_id: UUID) -> AiAnalysis | None:
+        stmt = select(AiAnalysisRecord).where(
+            and_(
+                AiAnalysisRecord.organization_id == self._organization_id,
+                AiAnalysisRecord.id == analysis_id,
+            )
+        )
+        res = await self._session.execute(stmt)
+        rec = res.scalar_one_or_none()
+        return m.ai_analysis_to_domain(rec) if rec else None
+
+    async def list_for_finding(self, finding_id: UUID) -> list[AiAnalysis]:
+        stmt = (
+            select(AiAnalysisRecord)
+            .where(
+                and_(
+                    AiAnalysisRecord.organization_id == self._organization_id,
+                    AiAnalysisRecord.finding_id == finding_id,
+                )
+            )
+            .order_by(AiAnalysisRecord.created_at.desc())
+        )
+        res = await self._session.execute(stmt)
+        return [m.ai_analysis_to_domain(r) for r in res.scalars()]
+
+    async def update(self, analysis: AiAnalysis) -> AiAnalysis:
+        record = m.ai_analysis_to_record(analysis)
+        merged = await self._session.merge(record)
+        await self._session.flush()
+        return m.ai_analysis_to_domain(merged)

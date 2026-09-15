@@ -264,6 +264,58 @@ class PermissionCatalogueEntry(Schema):
     privileged: bool
 
 
+# --- AI Analysis --------------------------------------------------------------------
+
+
+class AnalyzeFindingRequest(Schema):
+    kind: Literal["ROOT_CAUSE", "REMEDIATION", "TRIAGE_ASSESSMENT"] = "ROOT_CAUSE"
+
+
+class ReviewAnalysisRequest(Schema):
+    accept: bool
+    note: str = ""
+
+
+class AiAnalysisResponse(Schema):
+    id: UUID
+    organization_id: UUID
+    finding_id: UUID
+    kind: str
+    summary: str
+    content: str
+    status: str
+    model: str
+    prompt_hash: str
+    input_tokens: int
+    output_tokens: int
+    reviewed_by: UUID | None = None
+    review_note: str = ""
+    failure_reason: str = ""
+    created_at: datetime | None = None
+    reviewed_at: datetime | None = None
+
+    @classmethod
+    def of(cls, entity: Any) -> AiAnalysisResponse:
+        return cls(
+            id=entity.id,
+            organization_id=entity.organization_id,
+            finding_id=entity.finding_id,
+            kind=entity.kind.value if hasattr(entity.kind, "value") else str(entity.kind),
+            summary=entity.summary,
+            content=entity.content,
+            status=entity.status.value if hasattr(entity.status, "value") else str(entity.status),
+            model=entity.model,
+            prompt_hash=entity.prompt_hash,
+            input_tokens=entity.input_tokens,
+            output_tokens=entity.output_tokens,
+            reviewed_by=entity.reviewed_by,
+            review_note=entity.review_note,
+            failure_reason=entity.failure_reason,
+            created_at=entity.created_at,
+            reviewed_at=entity.reviewed_at,
+        )
+
+
 # --- API keys --------------------------------------------------------------------------------
 
 

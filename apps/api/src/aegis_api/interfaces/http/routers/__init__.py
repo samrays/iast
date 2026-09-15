@@ -2,7 +2,20 @@
 
 from fastapi import APIRouter
 
-from . import agents, api_keys, applications, audit, auth, findings, organizations, rules
+from . import (
+    agents,
+    ai,
+    api_keys,
+    applications,
+    audit,
+    auth,
+    export,
+    findings,
+    organizations,
+    protection,
+    reporting,
+    rules,
+)
 
 
 def build_api_router(prefix: str) -> APIRouter:
@@ -14,9 +27,14 @@ def build_api_router(prefix: str) -> APIRouter:
     router.include_router(applications.environments_router)
     router.include_router(agents.router)
     router.include_router(findings.router)
+    router.include_router(ai.router)
+    router.include_router(export.router)
+    router.include_router(protection.router)
+    router.include_router(reporting.router)
     router.include_router(rules.router)
     router.include_router(audit.router)
     return router
+
 
 
 __all__ = ["build_api_router"]

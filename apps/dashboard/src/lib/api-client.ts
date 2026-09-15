@@ -12,6 +12,7 @@
  */
 
 import type {
+  AiAnalysis,
   ApiKeyIssued,
   ApiKeySummary,
   ApplicationSummary,
@@ -43,7 +44,7 @@ import type {
 } from "./types";
 
 export const API_BASE_URL = (
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080"
+  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 ).replace(/\/$/, "");
 
 const API_PREFIX = "/api/v1";
@@ -514,5 +515,22 @@ export const api = {
     ) => request<Page<AuditEventSummary>>("/audit-events", { query: params }),
 
     verify: () => request<ChainVerification>("/audit-events/verify"),
+  },
+
+  ai: {
+    analyze: (
+      findingId: string,
+      kind: "ROOT_CAUSE" | "REMEDIATION" | "TRIAGE_ASSESSMENT" = "ROOT_CAUSE",
+    ) =>
+      request<AiAnalysis>(`/findings/${findingId}/analyze`, {
+        method: "POST",
+        body: { kind },
+      }),
+
+    review: (analysisId: string, accept: boolean, note: string = "") =>
+      request<AiAnalysis>(`/analyses/${analysisId}/review`, {
+        method: "POST",
+        body: { accept, note },
+      }),
   },
 };

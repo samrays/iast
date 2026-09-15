@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     product_name: str = "Aegis IAST"
 
     # --- Database ------------------------------------------------------------
-    database_url: str = "postgresql+asyncpg://aegis:aegis_local_dev@localhost:5432/aegis"
+    database_url: str = "postgresql+asyncpg://aegis:aegis_local_dev@localhost:5433/aegis"
     test_database_url: str | None = None
     database_pool_size: Annotated[int, Field(ge=1, le=100)] = 10
     database_max_overflow: Annotated[int, Field(ge=0, le=100)] = 20
@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     # ``NoDecode`` stops pydantic-settings from attempting to JSON-parse the raw env value;
     # the validator below accepts the far friendlier comma-separated form.
     cors_origins: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["http://localhost:3000"]
+        default_factory=lambda: ["http://localhost:3000", "http://localhost:3100"]
     )
     rate_limit_anonymous_per_minute: int = 10
     rate_limit_user_per_minute: int = 600

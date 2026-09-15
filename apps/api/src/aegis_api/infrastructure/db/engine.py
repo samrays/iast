@@ -13,13 +13,15 @@ from ...config import Settings
 
 
 def create_engine(settings: Settings) -> AsyncEngine:
-    """Build the async engine.
-
-    ``pool_pre_ping`` is on because connections routinely outlive a PgBouncer restart or a
-    failover, and a stale connection surfaces as a confusing 500 rather than a retry.
-    """
+    """Build the async engine."""
+    url = settings.effective_database_url
+    if "sqlite" in url:
+        return create_async_engine(
+            url,
+            echo=settings.database_echo,
+        )
     return create_async_engine(
-        settings.effective_database_url,
+        url,
         echo=settings.database_echo,
         pool_size=settings.database_pool_size,
         max_overflow=settings.database_max_overflow,

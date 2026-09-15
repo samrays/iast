@@ -34,6 +34,7 @@ from .repositories import (
     SqlRuleSettingsRepository,
     SqlSessionRepository,
     SqlUserRepository,
+    SqlAlchemyAiAnalysisRepository,
 )
 
 
@@ -147,10 +148,11 @@ class SqlUnitOfWork:
         a session-level setting would leak into the next request that reused the
         connection.
         """
-        await self.session.execute(
-            text("SELECT set_config('app.current_organization_id', :org_id, true)"),
-            {"org_id": str(organization_id)},
-        )
+        if self.session.bind and self.session.bind.dialect.name == "postgresql":
+            await self.session.execute(
+                text("SELECT set_config('app.current_organization_id', :org_id, true)"),
+                {"org_id": str(organization_id)},
+            )
         self._organization_id = organization_id
         self._memberships = SqlMembershipRepository(self.session, organization_id)
         self._roles = SqlRoleRepository(self.session, organization_id)
@@ -161,6 +163,7 @@ class SqlUnitOfWork:
         self._audit = SqlAuditRepository(self.session, organization_id)
         self._findings = SqlFindingRepository(self.session, organization_id)
         self._rule_settings = SqlRuleSettingsRepository(self.session, organization_id)
+        self._ai_analyses = SqlAlchemyAiAnalysisRepository(self.session, organization_id)
 
     @property
     def bound_organization_id(self) -> UUID | None:
@@ -220,6 +223,11 @@ class SqlUnitOfWork:
         self._require_tenant()
         return self._rule_settings
 
+    @property
+    def ai_analyses(self) -> SqlAlchemyAiAnalysisRepository:
+        self._require_tenant()
+        return self._ai_analyses
+
     # --- cross-tenant, by necessity -------------------------------------------
 
     async def find_active_organizations_for_user(self, user_id: UUID) -> list[Organization]:
@@ -244,9 +252,11 @@ class SqlUnitOfWork:
             )
             .order_by(OrganizationRecord.name)
         )
-        await self.session.execute(text("SELECT set_config('app.rls_bypass', 'on', true)"))
+        if self.session.bind and self.session.bind.dialect.name == "postgresql":
+            await self.session.execute(text("SELECT set_config('app.rls_bypass', 'on', true)"))
         try:
             records = (await self.session.execute(stmt)).scalars().all()
         finally:
-            await self.session.execute(text("SELECT set_config('app.rls_bypass', 'off', true)"))
+            if self.session.bind and self.session.bind.dialect.name == "postgresql":
+                await self.session.execute(text("SELECT set_config('app.rls_bypass', 'off', true)"))
         return [m.organization_to_domain(r) for r in records]

@@ -238,6 +238,25 @@ export interface ChainVerification {
   first_broken_sequence: number | null;
 }
 
+export interface AiAnalysis {
+  id: Uuid;
+  organization_id: Uuid;
+  finding_id: Uuid;
+  kind: "ROOT_CAUSE" | "REMEDIATION" | "TRIAGE_ASSESSMENT";
+  summary: string;
+  content: string;
+  status: "DRAFT" | "ACCEPTED" | "REJECTED" | "FAILED";
+  model: string;
+  prompt_hash: string;
+  input_tokens: number;
+  output_tokens: number;
+  reviewed_by: Uuid | null;
+  review_note: string;
+  failure_reason: string;
+  created_at: IsoDateTime | null;
+  reviewed_at: IsoDateTime | null;
+}
+
 // --- findings ----------------------------------------------------------------------
 
 export type FindingStatus =

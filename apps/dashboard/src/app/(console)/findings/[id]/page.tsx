@@ -7,6 +7,7 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 
 import { ErrorState, PageHeader } from "@/components/common";
+import { AiRemediationCard } from "@/components/AiRemediationCard";
 import { Badge, findingStatusVariant, severityVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -246,6 +247,8 @@ export default function FindingDetailPage() {
               </ul>
             </CardContent>
           </Card>
+
+          <AiRemediationCard findingId={id} canTriage={canTriage} />
 
           {canTriage || canSuppress ? (
             <Card>

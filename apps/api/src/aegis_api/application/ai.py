@@ -26,10 +26,15 @@ everything that followed.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
+from uuid import UUID, uuid4
 
-from ..domain.entities.ai import AnalysisKind
+from ..domain.entities.ai import AiAnalysis, AnalysisKind, AnalysisStatus, prompt_fingerprint
 from ..domain.entities.findings import Finding, Occurrence
+from ..domain.errors import NotFoundError
+from ..domain.permissions import Permission
+from ..domain.ports import Clock, UnitOfWork
+from .context import Principal
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,4 +176,120 @@ class EchoModel:
         )
 
 
-__all__ = ["EchoModel", "LanguageModel", "ModelResponse", "build_prompt"]
+class AnalyseFinding:
+    """Trigger an AI analysis (RCA, Remediation, Triage) for a finding.
+
+    Generates a draft analysis using the LanguageModel provider and stores it
+    in the tenant's ai_analyses repository.
+    """
+
+    def __init__(
+        self,
+        *,
+        uow_factory: Callable[[], UnitOfWork],
+        model: LanguageModel,
+        clock: Clock,
+    ) -> None:
+        self._uow_factory = uow_factory
+        self._model = model
+        self._clock = clock
+
+    async def execute(
+        self,
+        *,
+        principal: Principal,
+        finding_id: UUID,
+        kind: AnalysisKind,
+    ) -> AiAnalysis:
+        principal.require_permission(Permission.FINDINGS_WRITE)
+
+        async with self._uow_factory() as uow:
+            await uow.bind_tenant(principal.organization_id)
+            finding = await uow.findings.get(finding_id)
+            if finding is None:
+                raise NotFoundError(f"Finding {finding_id} not found.")
+
+            occurrences = await uow.findings.list_occurrences(finding_id, limit=1)
+            occurrence = occurrences[0] if occurrences else None
+
+            prompt = build_prompt(finding, occurrence, kind)
+            p_hash = prompt_fingerprint(prompt)
+
+            now = self._clock.now()
+            analysis = AiAnalysis(
+                organization_id=principal.organization_id,
+                finding_id=finding_id,
+                kind=kind,
+                prompt_hash=p_hash,
+                created_at=now,
+            )
+
+            try:
+                resp = await self._model.complete(
+                    system=_SYSTEM_PROMPT,
+                    user=prompt,
+                    max_output_tokens=1500,
+                )
+                analysis.summary = resp.summary
+                analysis.content = resp.content
+                analysis.model = resp.model
+                analysis.input_tokens = resp.input_tokens
+                analysis.output_tokens = resp.output_tokens
+                analysis.status = AnalysisStatus.DRAFT
+            except Exception as exc:
+                analysis.fail(str(exc))
+
+            created = await uow.ai_analyses.add(analysis)
+            await uow.commit()
+            return created
+
+
+class ReviewAnalysis:
+    """Human-in-the-Loop review (Accept or Reject) for a draft AI analysis."""
+
+    def __init__(
+        self,
+        *,
+        uow_factory: Callable[[], UnitOfWork],
+        clock: Clock,
+    ) -> None:
+        self._uow_factory = uow_factory
+        self._clock = clock
+
+    async def execute(
+        self,
+        *,
+        principal: Principal,
+        analysis_id: UUID,
+        accept: bool,
+        note: str = "",
+    ) -> AiAnalysis:
+        principal.require_permission(Permission.FINDINGS_WRITE)
+
+        async with self._uow_factory() as uow:
+            await uow.bind_tenant(principal.organization_id)
+            analysis = await uow.ai_analyses.get(analysis_id)
+            if analysis is None:
+                raise NotFoundError(f"AI analysis {analysis_id} not found.")
+
+            now = self._clock.now()
+            user_id = principal.user_id if principal.user_id else uuid4()
+
+            if accept:
+                analysis.accept(reviewer_id=user_id, now=now, note=note)
+            else:
+                analysis.reject(reviewer_id=user_id, now=now, note=note)
+
+            updated = await uow.ai_analyses.update(analysis)
+            await uow.commit()
+            return updated
+
+
+__all__ = [
+    "AnalyseFinding",
+    "EchoModel",
+    "LanguageModel",
+    "ModelResponse",
+    "ReviewAnalysis",
+    "build_prompt",
+]

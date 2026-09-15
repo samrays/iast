@@ -16,6 +16,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     Column,
@@ -32,9 +33,22 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, CITEXT, INET, JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.postgresql import (
+    ARRAY as PG_ARRAY,
+    CITEXT as PG_CITEXT,
+    INET as PG_INET,
+    JSONB as PG_JSONB,
+)
 
+JSONB = JSON().with_variant(PG_JSONB(), "postgresql")
+CITEXT = String(255).with_variant(PG_CITEXT(), "postgresql")
+INET = String(45).with_variant(PG_INET(), "postgresql")
+
+
+def ARRAY(item_type=None, *args, **kwargs):
+    return JSON().with_variant(PG_ARRAY(item_type or String, *args, **kwargs), "postgresql")
+
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base, TimestampMixin
 
 # --- Enumerations -------------------------------------------------------------------
@@ -79,7 +93,7 @@ class OrganizationRecord(Base, TimestampMixin):
         String(20), nullable=False, default="ACTIVE", server_default="ACTIVE"
     )
     settings: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+        JSONB, nullable=False, default=dict, server_default=text("'{}'")
     )
     deletion_scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -236,7 +250,7 @@ class RoleRecord(Base, TimestampMixin):
     # A closed set of short strings, never queried independently of its role — an array is
     # the right shape and avoids a join on the hottest authorization path.
     permissions: Mapped[list[str]] = mapped_column(
-        ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
+        ARRAY(Text), nullable=False, server_default=text("'{}'")
     )
 
     __table_args__ = (
@@ -286,7 +300,7 @@ class ApiKeyRecord(Base, TimestampMixin):
     prefix: Mapped[str] = mapped_column(String(12), nullable=False, unique=True)
     secret_hash: Mapped[str] = mapped_column(Text, nullable=False)
     permissions: Mapped[list[str]] = mapped_column(
-        ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
+        ARRAY(Text), nullable=False, server_default=text("'{}'")
     )
     created_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -313,7 +327,7 @@ class ApplicationRecord(Base, TimestampMixin):
         String(10), nullable=False, default="MEDIUM", server_default="MEDIUM"
     )
     tags: Mapped[list[str]] = mapped_column(
-        ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
+        ARRAY(Text), nullable=False, server_default=text("'{}'")
     )
     repository_url: Mapped[str | None] = mapped_column(String(500))
     description: Mapped[str] = mapped_column(
@@ -390,7 +404,7 @@ class AgentRecord(Base, TimestampMixin):
         Integer, nullable=False, default=0, server_default="0"
     )
     health: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+        JSONB, nullable=False, default=dict, server_default=text("'{}'")
     )
     pinned_version: Mapped[str | None] = mapped_column(String(40))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -439,7 +453,7 @@ class FindingRecord(Base, TimestampMixin):
         Numeric(4, 2), nullable=False, default=0, server_default=text("0")
     )
     risk_factors: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+        JSONB, nullable=False, default=list, server_default=text("'[]'")
     )
     occurrence_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
@@ -454,10 +468,10 @@ class FindingRecord(Base, TimestampMixin):
         Integer, nullable=False, default=0, server_default=text("0")
     )
     environments_seen: Mapped[list[str]] = mapped_column(
-        ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
+        ARRAY(Text), nullable=False, server_default=text("'{}'")
     )
     route_templates: Mapped[list[str]] = mapped_column(
-        ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
+        ARRAY(Text), nullable=False, server_default=text("'{}'")
     )
     first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -530,10 +544,10 @@ class OccurrenceRecord(Base):
     )
     sink_argument: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     tainted_ranges: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+        JSONB, nullable=False, default=list, server_default=text("'[]'")
     )
     stack_frames: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+        JSONB, nullable=False, default=list, server_default=text("'[]'")
     )
     remote_address: Mapped[str | None] = mapped_column(INET)
     attack_detected: Mapped[bool] = mapped_column(
@@ -587,7 +601,44 @@ class FindingCommentRecord(Base):
     )
 
 
+class AiAnalysisRecord(Base):
+    """AI analyses of findings (Root cause, Remediation, Triage assessment)."""
+
+    __tablename__ = "ai_analyses"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    finding_id: Mapped[UUID] = mapped_column(
+        ForeignKey("findings.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    summary: Mapped[str] = mapped_column(String(300), nullable=False, default="", server_default="")
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="DRAFT", server_default="DRAFT"
+    )
+    model: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    reviewed_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    review_note: Mapped[str] = mapped_column(String(2000), nullable=False, default="", server_default="")
+    failure_reason: Mapped[str] = mapped_column(String(500), nullable=False, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("ix_ai_analyses_finding_id_created_at", "finding_id", "created_at"),
+        Index("ix_ai_analyses_organization_id", "organization_id"),
+    )
+
+
 # --- Audit --------------------------------------------------------------------------
+
 
 
 class AuditEventRecord(Base):
@@ -625,7 +676,7 @@ class AuditEventRecord(Base):
         String(64), nullable=False, default="", server_default=""
     )
     event_metadata: Mapped[dict[str, Any]] = mapped_column(
-        "metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+        "metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'")
     )
     previous_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     entry_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -664,6 +715,7 @@ TENANT_TABLES: tuple[str, ...] = (
     "findings",
     "finding_occurrences",
     "finding_comments",
+    "ai_analyses",
 )
 
 #: Tables the application may INSERT into and read, but never rewrite.
@@ -693,7 +745,7 @@ class TenantRuleSettingsRecord(Base, TimestampMixin):
     )
     #: rule key -> the reason somebody gave for turning it off.
     disabled: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+        JSONB, nullable=False, default=dict, server_default=text("'{}'")
     )
 
 

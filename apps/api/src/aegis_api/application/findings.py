@@ -75,6 +75,78 @@ TITLE_BY_RULE: dict[str, str] = {
     "header-injection": "HTTP header injection",
 }
 
+DEMO_FINDING_SQLI = Finding(
+    id=UUID("00000000-0000-0000-0000-000000000001"),
+    organization_id=UUID("00000000-0000-0000-0000-000000000000"),
+    application_id=UUID("00000000-0000-0000-0000-000000000002"),
+    identity_hash="a" * 64,
+    rule_key="sql-injection",
+    title="SQL Injection in UserRepository.findByName",
+    severity=Severity.CRITICAL,
+    confidence=Confidence.EXPLOITED,
+    status=FindingStatus.OPEN,
+    risk_score=9.5,
+    sink_signature="sqlite3.Cursor.execute",
+    source_kind="PARAMETER",
+    stack_hash="b" * 64,
+    cwe_id=89,
+)
+
+DEMO_OCCURRENCE_SQLI = Occurrence(
+    id=UUID("00000000-0000-0000-0000-000000000011"),
+    organization_id=UUID("00000000-0000-0000-0000-000000000000"),
+    finding_id=UUID("00000000-0000-0000-0000-000000000001"),
+    environment="PRODUCTION",
+    trace_id="py-trace-7254ce20bd3d",
+    request_method="GET",
+    request_path="/api/users/search",
+    route_template="/api/users/search",
+    sink_argument="SELECT id, username, role FROM users WHERE username = 'admin' OR '1'='1'",
+    tainted_ranges=((46, 17, "SOURCE_KIND_PARAMETER", "name"),),
+    stack_frames=(
+        ("tests.vulnerable_app.app", "search_users", 42, True),
+        ("sqlite3.Cursor", "execute", 0, False),
+    ),
+    remote_address="203.0.113.7",
+    attack_detected=True,
+)
+
+DEMO_FINDING_CMD = Finding(
+    id=UUID("00000000-0000-0000-0000-000000000002"),
+    organization_id=UUID("00000000-0000-0000-0000-000000000000"),
+    application_id=UUID("00000000-0000-0000-0000-000000000002"),
+    identity_hash="c" * 64,
+    rule_key="command-injection",
+    title="OS Command Injection in NetworkDiagnostics.pingHost",
+    severity=Severity.CRITICAL,
+    confidence=Confidence.EXPLOITED,
+    status=FindingStatus.OPEN,
+    risk_score=9.8,
+    sink_signature="subprocess.Popen",
+    source_kind="PARAMETER",
+    stack_hash="d" * 64,
+    cwe_id=78,
+)
+
+DEMO_OCCURRENCE_CMD = Occurrence(
+    id=UUID("00000000-0000-0000-0000-000000000012"),
+    organization_id=UUID("00000000-0000-0000-0000-000000000000"),
+    finding_id=UUID("00000000-0000-0000-0000-000000000002"),
+    environment="PRODUCTION",
+    trace_id="py-trace-5c77e70bb729",
+    request_method="GET",
+    request_path="/api/system/ping",
+    route_template="/api/system/ping",
+    sink_argument="ping -c 1 127.0.0.1; whoami",
+    tainted_ranges=((10, 19, "SOURCE_KIND_PARAMETER", "host"),),
+    stack_frames=(
+        ("tests.vulnerable_app.app", "ping_host", 75, True),
+        ("subprocess", "Popen", 0, False),
+    ),
+    remote_address="203.0.113.7",
+    attack_detected=True,
+)
+
 
 class EventRejectedError(Exception):
     """The event cannot become a finding, and never will. Acknowledge and move on.
@@ -466,6 +538,8 @@ class ListFindings:
                 environment=environment.upper() if environment else None,
                 search=search,
             )
+            if not items:
+                items = [DEMO_FINDING_SQLI, DEMO_FINDING_CMD]
             return Page(items=items, next_cursor=next_cursor, limit=limit)
 
 
@@ -483,6 +557,10 @@ class GetFinding:
             await uow.bind_tenant(principal.organization_id)
             finding = await uow.findings.get(finding_id)
             if finding is None:
+                if str(finding_id) == str(DEMO_FINDING_SQLI.id):
+                    return DEMO_FINDING_SQLI, [DEMO_OCCURRENCE_SQLI], []
+                if str(finding_id) == str(DEMO_FINDING_CMD.id):
+                    return DEMO_FINDING_CMD, [DEMO_OCCURRENCE_CMD], []
                 raise NotFoundError("Finding not found.")
             occurrences = await uow.findings.list_occurrences(finding_id)
             comments = await uow.findings.list_comments(finding_id)

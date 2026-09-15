@@ -1,0 +1,17 @@
+{
+  "name": "@aegis/node-agent",
+  "version": "0.1.0",
+  "description": "Aegis IAST Node.js runtime agent — async_hooks taint tracking, RASP protection & telemetry",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}

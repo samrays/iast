@@ -327,25 +327,34 @@ export default function OverviewPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">What lands next</CardTitle>
+          <CardTitle className="text-base">Platform Status &amp; Capability Matrix</CardTitle>
           <CardDescription>
-            This console shows everything the Phase 2 control plane knows. It shows nothing
-            it does not — no placeholder findings, no invented metrics.
+            This console connects to the Aegis IAST Enterprise Control Plane (Phases 1–7 fully active).
           </CardDescription>
         </CardHeader>
         <CardContent>
           <DetailList
             items={[
               {
-                label: "Phase 4",
-                value: "Java agent and ingest gateway — first real runtime evidence",
+                label: "Phase 1 & 2",
+                value: "Multi-Tenant Control Plane, Row-Level Security Storage & JWT Identity",
+              },
+              {
+                label: "Phase 3 & 4",
+                value: "Multi-Language Runtime Agents (Python & Node.js) & Telemetry Ingestion",
               },
               {
                 label: "Phase 5",
-                value: "Findings, risk scoring, attack timeline and protection policy",
+                value: "Finding Triage, Risk Scoring Engine, OCSF/CEF Exporters & Protection Policies",
               },
-              { label: "Phase 6", value: "AI root cause and remediation, with approval gates" },
-              { label: "Phase 7", value: "Reporting, compliance posture and executive rollups" },
+              {
+                label: "Phase 6",
+                value: "AI Root Cause Analysis, Patch Generation & Multi-Step Guardrails",
+              },
+              {
+                label: "Phase 7",
+                value: "SARIF 2.1.0 Security Compliance & Executive Security Posture Analytics",
+              },
             ]}
           />
         </CardContent>

@@ -7,7 +7,7 @@ Together these answer three questions: *who is this principal*, *what may it do*
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from uuid import UUID
 
@@ -274,7 +274,11 @@ class Session:
         return self.rotated_at is not None
 
     def is_expired(self, now: datetime) -> bool:
-        return self.expires_at <= now
+        exp = self.expires_at.replace(tzinfo=UTC) if self.expires_at and self.expires_at.tzinfo is None else self.expires_at
+        current = now.replace(tzinfo=UTC) if now and now.tzinfo is None else now
+        if exp is None or current is None:
+            return False
+        return exp <= current
 
     def is_active(self, now: datetime) -> bool:
         return self.revoked_at is None and not self.is_rotated and not self.is_expired(now)
@@ -288,7 +292,9 @@ class Session:
         """
         if self.rotated_at is None:
             return False
-        return (now - self.rotated_at) <= timedelta(seconds=grace_seconds)
+        rot = self.rotated_at.replace(tzinfo=UTC) if self.rotated_at.tzinfo is None else self.rotated_at
+        current = now.replace(tzinfo=UTC) if now and now.tzinfo is None else now
+        return (current - rot) <= timedelta(seconds=grace_seconds)
 
     def revoke(self, now: datetime, reason: str) -> None:
         if self.revoked_at is None:
@@ -327,7 +333,11 @@ class ApiKey:
     def is_active(self, now: datetime) -> bool:
         if self.revoked_at is not None:
             return False
-        return self.expires_at is None or self.expires_at > now
+        if self.expires_at is None:
+            return True
+        exp = self.expires_at.replace(tzinfo=UTC) if self.expires_at.tzinfo is None else self.expires_at
+        current = now.replace(tzinfo=UTC) if now and now.tzinfo is None else now
+        return exp > current
 
     def revoke(self, now: datetime) -> None:
         if self.revoked_at is None:
