@@ -169,7 +169,7 @@ class ExportFindings:
         fmt: str = "sarif",
         application_id: UUID | None = None,
     ) -> tuple[dict[str, Any] | str, str]:
-        principal.require_permission(Permission.FINDING_READ)
+        principal.require(Permission.FINDING_READ)
 
         async with self._uow_factory() as uow:
             await uow.bind_tenant(principal.organization_id)

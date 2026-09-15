@@ -1,6 +1,7 @@
 import {
   Activity,
   Boxes,
+  FlaskConical,
   KeyRound,
   LayoutDashboard,
   ScrollText,
@@ -36,6 +37,12 @@ export const NAV_SECTIONS: NavSection[] = [
         label: "Overview",
         icon: LayoutDashboard,
         description: "Portfolio posture and fleet health at a glance",
+      },
+      {
+        href: "/benchmark",
+        label: "Benchmark",
+        icon: FlaskConical,
+        description: "Run and inspect empirical OWASP Top 10 test suite",
       },
       {
         href: "/findings",

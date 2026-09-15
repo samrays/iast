@@ -37,7 +37,7 @@ def test_soak_period_enforcement_blocks_premature_transition() -> None:
         policy.transition_to(ProtectionMode.BLOCK, check_time)
 
 
-def test_transition_to_block_allowed_after_24h_soak() -> None:
+def test_transition_to_block_allowed_after_soak() -> None:
     start_time = datetime(2026, 8, 1, 12, 0, 0)
     policy = ProtectionPolicy.create(
         organization_id=uuid4(),
@@ -46,8 +46,8 @@ def test_transition_to_block_allowed_after_24h_soak() -> None:
         now=start_time,
     )
 
-    # Transition to BLOCK after 25 hours
-    check_time = start_time + timedelta(hours=25)
+    # Transition to BLOCK after 337 hours (14 days + 1 hour)
+    check_time = start_time + timedelta(hours=337)
     policy.transition_to(ProtectionMode.BLOCK, check_time)
     assert policy.mode == ProtectionMode.BLOCK
 

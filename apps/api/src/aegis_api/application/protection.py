@@ -20,7 +20,7 @@ class ManageProtectionPolicy:
         self._clock = clock
 
     async def get_policy(self, principal: Principal, application_id: UUID) -> ProtectionPolicy:
-        principal.require_permission(Permission.APPLICATION_READ)
+        principal.require(Permission.APP_READ)
         now = self._clock.now()
 
         async with self._uow_factory() as uow:
@@ -39,7 +39,7 @@ class ManageProtectionPolicy:
         application_id: UUID,
         new_mode: ProtectionMode,
     ) -> ProtectionPolicy:
-        principal.require_permission(Permission.APPLICATION_WRITE)
+        principal.require(Permission.APP_WRITE)
         now = self._clock.now()
 
         policy = await self.get_policy(principal, application_id)

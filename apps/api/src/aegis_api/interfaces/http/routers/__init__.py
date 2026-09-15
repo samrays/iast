@@ -9,6 +9,7 @@ from . import (
     applications,
     audit,
     auth,
+    benchmark,
     export,
     findings,
     organizations,
@@ -33,6 +34,7 @@ def build_api_router(prefix: str) -> APIRouter:
     router.include_router(reporting.router)
     router.include_router(rules.router)
     router.include_router(audit.router)
+    router.include_router(benchmark.router)
     return router
 
 

@@ -367,7 +367,13 @@ class ProcessRuntimeEvents:
         if finding.occurrence_count <= 1:
             return True
         latest = await uow.findings.latest_occurrence_at(finding.id)
-        return latest is None or observed_at - latest >= self._evidence_interval
+        if latest is None:
+            return True
+        if latest.tzinfo is None and observed_at.tzinfo is not None:
+            latest = latest.replace(tzinfo=UTC)
+        elif latest.tzinfo is not None and observed_at.tzinfo is None:
+            observed_at = observed_at.replace(tzinfo=UTC)
+        return observed_at - latest >= self._evidence_interval
 
 
 _CONFIDENCE_ORDER = {

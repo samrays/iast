@@ -25,8 +25,9 @@ everything that followed.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 from uuid import UUID, uuid4
 
 from ..domain.entities.ai import AiAnalysis, AnalysisKind, AnalysisStatus, prompt_fingerprint
@@ -201,7 +202,7 @@ class AnalyseFinding:
         finding_id: UUID,
         kind: AnalysisKind,
     ) -> AiAnalysis:
-        principal.require_permission(Permission.FINDINGS_WRITE)
+        principal.require(Permission.AI_RUN)
 
         async with self._uow_factory() as uow:
             await uow.bind_tenant(principal.organization_id)
@@ -264,7 +265,7 @@ class ReviewAnalysis:
         accept: bool,
         note: str = "",
     ) -> AiAnalysis:
-        principal.require_permission(Permission.FINDINGS_WRITE)
+        principal.require(Permission.AI_APPROVE)
 
         async with self._uow_factory() as uow:
             await uow.bind_tenant(principal.organization_id)
@@ -277,12 +278,27 @@ class ReviewAnalysis:
 
             if accept:
                 analysis.accept(reviewer_id=user_id, now=now, note=note)
+                # Generate automated Git Pull Request metadata for human-in-the-loop deployment
+                pr_payload = self.generate_pull_request_payload(analysis)
+                analysis.content += f"\n\n### Automated Remediation Pull Request\n```json\n{json.dumps(pr_payload, indent=2)}\n```"
             else:
                 analysis.reject(reviewer_id=user_id, now=now, note=note)
 
             updated = await uow.ai_analyses.update(analysis)
             await uow.commit()
             return updated
+
+    def generate_pull_request_payload(self, analysis: AiAnalysis) -> dict[str, Any]:
+        """Synthesize Git PR payload for automated security patch submission."""
+        timestamp = int(self._clock.now().timestamp())
+        return {
+            "title": f"security: fix {analysis.kind.value.lower()} for finding {str(analysis.finding_id)[:8]}",
+            "branch_name": f"aegis/remediation-{str(analysis.finding_id)[:8]}-{timestamp}",
+            "base_branch": "main",
+            "commit_message": f"fix: apply verified Aegis AI patch for finding {analysis.finding_id}",
+            "patch_summary": analysis.summary[:200] if analysis.summary else "Automated security remediation patch",
+            "reviewer_status": "APPROVED",
+        }
 
 
 __all__ = [

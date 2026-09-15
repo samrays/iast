@@ -10,7 +10,7 @@ from uuid import UUID
 from ..errors import InvalidStateError
 from ..value_objects import new_id
 
-SOAK_DURATION_HOURS = 24  # Minimum soak duration before BLOCK mode can be enabled
+SOAK_DURATION_HOURS = 336  # Mandatory 14-day (336h) soak duration before BLOCK mode can be enabled
 
 
 class ProtectionMode(StrEnum):

@@ -3,13 +3,20 @@
 import { useQuery } from "@tanstack/react-query";
 import { ShieldAlert } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { EmptyState, ErrorState, PageHeader, TableSkeleton } from "@/components/common";
 import { Badge, findingStatusVariant, severityVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -30,14 +37,30 @@ export default function FindingsPage() {
   // Open work first. Someone arriving at this screen wants the queue, not the archive.
   const [statuses, setStatuses] = useState<string[]>(["OPEN", "CONFIRMED"]);
   const [search, setSearch] = useState("");
+  const [applicationId, setApplicationId] = useState<string>("ALL");
   const [cursor, setCursor] = useState<string | undefined>(undefined);
 
+  const applications = useQuery({
+    queryKey: ["applications"],
+    queryFn: () => api.applications.list({ limit: 100 }),
+    enabled: can(Permission.APP_READ),
+  });
+
+  const appNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const app of applications.data?.items ?? []) {
+      map.set(app.id, app.name);
+    }
+    return map;
+  }, [applications.data]);
+
   const findings = useQuery({
-    queryKey: ["findings", statuses, search, cursor ?? "first"],
+    queryKey: ["findings", statuses, search, applicationId, cursor ?? "first"],
     queryFn: () =>
       api.findings.list({
         limit: 50,
         status: statuses,
+        ...(applicationId !== "ALL" ? { application_id: applicationId } : {}),
         ...(search ? { search } : {}),
         ...(cursor ? { cursor } : {}),
       }),
@@ -79,16 +102,39 @@ export default function FindingsPage() {
               {status.replace("_", " ").toLowerCase()}
             </Button>
           ))}
-          <Input
-            className="ml-auto w-64"
-            placeholder="Search titles…"
-            value={search}
-            onChange={(event) => {
-              setCursor(undefined);
-              setSearch(event.target.value);
-            }}
-            aria-label="Search findings"
-          />
+
+          <div className="ml-auto flex items-center gap-2">
+            <Select
+              value={applicationId}
+              onValueChange={(val) => {
+                setCursor(undefined);
+                setApplicationId(val);
+              }}
+            >
+              <SelectTrigger className="w-56" aria-label="Filter by application">
+                <SelectValue placeholder="All Applications" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ALL">All Applications</SelectItem>
+                {applications.data?.items.map((app) => (
+                  <SelectItem key={app.id} value={app.id}>
+                    {app.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Input
+              className="w-64"
+              placeholder="Search titles…"
+              value={search}
+              onChange={(event) => {
+                setCursor(undefined);
+                setSearch(event.target.value);
+              }}
+              aria-label="Search findings"
+            />
+          </div>
         </CardContent>
       </Card>
 
@@ -113,6 +159,7 @@ export default function FindingsPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Finding</TableHead>
+                  <TableHead className="w-48">Application</TableHead>
                   <TableHead className="w-24">Risk</TableHead>
                   <TableHead className="w-28">Severity</TableHead>
                   <TableHead className="w-32">Status</TableHead>
@@ -135,6 +182,11 @@ export default function FindingsPage() {
                         {finding.cwe_id ? ` · CWE-${finding.cwe_id}` : ""}
                         {finding.regressed ? " · regressed" : ""}
                       </p>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="truncate max-w-[180px]">
+                        {appNameMap.get(finding.application_id) ?? "Unknown App"}
+                      </Badge>
                     </TableCell>
                     <TableCell className="font-mono tabular-nums">
                       {finding.risk_score.toFixed(1)}

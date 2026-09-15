@@ -350,3 +350,24 @@ export interface DetectionRule {
   enabled: boolean;
   disabled_reason: string;
 }
+
+// --- hybrid telemetry & automated remediation --------------------------------------
+
+export interface HybridCorrelationSummary {
+  iast_findings_count: number;
+  dast_findings_count: number;
+  correlated_findings_count: number;
+  false_positives_suppressed: number;
+  mean_time_to_scan_seconds: number;
+  precision_pct: number;
+  recall_pct: number;
+}
+
+export interface AutomatedPullRequestPayload {
+  title: string;
+  branch_name: string;
+  base_branch: string;
+  commit_message: string;
+  patch_summary: string;
+  reviewer_status: "APPROVED" | "PENDING" | "REJECTED";
+}

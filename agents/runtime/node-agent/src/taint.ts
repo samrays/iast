@@ -71,10 +71,14 @@ export function isTainted(value: unknown): { tainted: boolean; record?: TaintRec
     return { tainted: true, record: exact };
   }
 
-  // Check substring matches for concatenated queries
-  for (const [key, record] of taintRegistry.entries()) {
-    if (value.includes(key)) {
-      return { tainted: true, record };
+  // Substring check fallback: only evaluate when an active request trace context exists
+  // and the tainted value length is at least 3 characters to prevent static constant FPs
+  const trace = getCurrentTrace();
+  if (trace) {
+    for (const [key, record] of taintRegistry.entries()) {
+      if (key && key.length >= 3 && value.includes(key)) {
+        return { tainted: true, record };
+      }
     }
   }
 

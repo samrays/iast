@@ -89,7 +89,7 @@ class GenerateComplianceReport:
         application_id: UUID | None = None,
         fmt: str = "json",
     ) -> tuple[dict[str, Any] | str, str]:
-        principal.require_permission(Permission.FINDING_READ)
+        principal.require(Permission.REPORT_READ)
 
         async with self._uow_factory() as uow:
             await uow.bind_tenant(principal.organization_id)

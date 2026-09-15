@@ -1,7 +1,9 @@
 """Unit tests for AI Graph Orchestrator."""
 
+from __future__ import annotations
+
 from datetime import datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -48,32 +50,49 @@ class FakeLanguageModel:
         )
 
 
-@pytest.mark.asyncio
-async def test_ai_graph_orchestrator_execution(container: Any) -> None:
-    from aegis_api.domain.entities import Application, Language, Organization
-    from aegis_api.domain.value_objects import Slug
+class FakeFindingRepository:
+    def __init__(self, finding: Finding) -> None:
+        self._finding = finding
 
-    async with container.unit_of_work() as uow:
-        org = Organization(name="Test Org", slug=Slug("test-org"))
-        await uow.organizations.add(org)
-        await uow.bind_tenant(org.id)
-        app = Application(organization_id=org.id, name="Test App", slug=Slug("test-app"), language=Language.JAVA)
-        await uow.applications.add(app)
-        finding = make_finding(organization_id=org.id, application_id=app.id)
-        await uow.findings.upsert(finding)
-        await uow.commit()
+    async def get(self, finding_id: UUID) -> Finding:
+        return self._finding
+
+    async def list_occurrences(self, finding_id: UUID, limit: int = 1) -> list[Any]:
+        return []
+
+
+class FakeUnitOfWork:
+    def __init__(self, finding: Finding) -> None:
+        self.findings = FakeFindingRepository(finding)
+
+    async def __aenter__(self) -> FakeUnitOfWork:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        pass
+
+    async def bind_tenant(self, organization_id: UUID) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_ai_graph_orchestrator_execution() -> None:
+    org_id = uuid4()
+    app_id = uuid4()
+    finding = make_finding(organization_id=org_id, application_id=app_id)
 
     principal = Principal(
         kind=ActorType.USER,
         user_id=uuid4(),
-        organization_id=org.id,
+        organization_id=org_id,
         permissions=frozenset({Permission.AI_RUN}),
     )
 
     fake_model = FakeLanguageModel()
     from aegis_api.infrastructure.clock import SystemClock
 
-    orchestrator = AiGraphOrchestrator(container.unit_of_work, fake_model, SystemClock())
+    uow = FakeUnitOfWork(finding)
+    orchestrator = AiGraphOrchestrator(lambda: uow, fake_model, SystemClock())
     result = await orchestrator.execute_graph(principal=principal, finding_id=finding.id)
     assert result.finding_id == finding.id
     assert result.guardrail_passed is True

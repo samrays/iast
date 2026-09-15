@@ -13,6 +13,7 @@ import {
   YAxis,
 } from "recharts";
 
+import { Chapter4BenchmarkRunner } from "@/components/Chapter4BenchmarkRunner";
 import { DetailList, EmptyState, ErrorState, PageHeader, StatTile } from "@/components/common";
 import { Badge, criticalityVariant, outcomeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -109,6 +110,8 @@ export default function OverviewPage() {
           ) : null
         }
       />
+
+      <Chapter4BenchmarkRunner />
 
       {loading ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">

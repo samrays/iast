@@ -57,7 +57,7 @@ export function AiRemediationCard({ findingId, canTriage }: AiRemediationCardPro
               analysis.status === "ACCEPTED"
                 ? "default"
                 : analysis.status === "REJECTED"
-                ? "destructive"
+                ? "danger"
                 : "secondary"
             }
           >

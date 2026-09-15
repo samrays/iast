@@ -35,7 +35,7 @@ async def analyze_finding(
     analysis = await AnalyseFinding(
         uow_factory=container.unit_of_work,
         model=model,
-        clock=container.clock,
+        clock=container.auth.clock,
     ).execute(
         principal=principal,
         finding_id=finding_id,
@@ -57,7 +57,7 @@ async def review_analysis(
 ) -> AiAnalysisResponse:
     analysis = await ReviewAnalysis(
         uow_factory=container.unit_of_work,
-        clock=container.clock,
+        clock=container.auth.clock,
     ).execute(
         principal=principal,
         analysis_id=analysis_id,

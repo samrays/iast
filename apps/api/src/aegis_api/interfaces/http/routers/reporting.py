@@ -32,7 +32,7 @@ async def generate_compliance_report(
 ) -> Response:
     payload, media_type = await GenerateComplianceReport(
         uow_factory=container.unit_of_work,
-        clock=container.clock,
+        clock=container.auth.clock,
     ).execute(
         principal=principal,
         framework=framework,

@@ -533,4 +533,59 @@ export const api = {
         body: { accept, note },
       }),
   },
+
+  benchmark: {
+    runChapter4: () =>
+      request<{
+        run_id: string;
+        executed_at: string;
+        total_test_cases: number;
+        vulnerability_endpoints: number;
+        control_endpoints: number;
+        passed_tests: number;
+        failed_tests: number;
+        metrics: {
+          precision: number;
+          recall: number;
+          f1_score: number;
+          false_discovery_rate: number;
+          mtts_seconds: number;
+          dast_precision: number;
+          dast_recall: number;
+          dast_f1_score: number;
+          dast_fdr: number;
+          dast_mtts_seconds: number;
+          speedup_factor: number;
+        };
+        test_cases: Array<{
+          category: string;
+          rule_key: string;
+          severity: string;
+          confidence: string;
+          sink_signature: string;
+          sink_argument: string;
+          route: string;
+          method: string;
+          cwe_id: number;
+          detected: boolean;
+          latency_ms: number;
+          result_status: string;
+        }>;
+      }>("/benchmark/run-chapter4", { method: "POST" }),
+
+    getStatus: () =>
+      request<{
+        precision: number;
+        recall: number;
+        f1_score: number;
+        false_discovery_rate: number;
+        mtts_seconds: number;
+        dast_precision: number;
+        dast_recall: number;
+        dast_f1_score: number;
+        dast_fdr: number;
+        dast_mtts_seconds: number;
+        speedup_factor: number;
+      }>("/benchmark/status"),
+  },
 };
