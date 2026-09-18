@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 # Add Aegis Python Agent to sys.path
@@ -22,6 +23,7 @@ if str(AGENT_SRC) not in sys.path:
 
 from aegis_python_agent import (
     AegisAgent,
+    AegisSecurityBlockException,
     check_path_traversal_sink,
     check_sql_sink,
     mark_tainted,
@@ -37,6 +39,14 @@ agent = AegisAgent.start(
 
 app = FastAPI(title="Google Online Boutique - Recommendation Service")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Setup SQLite Database for Product Recommendations Catalog
 conn = sqlite3.connect(":memory:", check_same_thread=False)
 cursor = conn.cursor()
@@ -49,6 +59,38 @@ cursor.execute(
     "('L9ECAV2K07', 'Air Plant Terrarium', 'gardening', 12.99);"
 )
 conn.commit()
+
+
+@app.exception_handler(AegisSecurityBlockException)
+async def aegis_block_handler(request: Request, exc: AegisSecurityBlockException):
+    """Handle ADR active defense blocks, returning HTTP 403 problem details."""
+    return JSONResponse(
+        status_code=403,
+        headers={"X-Aegis-Action": "BLOCKED"},
+        content={
+            "type": "https://aegis.security/errors/runtime-block",
+            "title": "Aegis ADR Security Block",
+            "status": 403,
+            "detail": exc.message,
+            "rule_key": exc.rule_key,
+            "sink": exc.sink_signature,
+            "action": "BLOCKED",
+            "service": "recommendationservice",
+            "iast_finding_detected": True,
+        },
+    )
+
+
+@app.get("/api/protection-mode")
+async def get_protection_mode():
+    return {"service": "recommendationservice", "mode": agent.protection_mode}
+
+
+@app.post("/api/protection-mode")
+async def set_protection_mode(payload: dict):
+    mode = payload.get("mode", "MONITOR").upper()
+    agent.set_protection_mode(mode)
+    return {"service": "recommendationservice", "mode": agent.protection_mode}
 
 
 @app.middleware("http")
@@ -101,6 +143,12 @@ async def get_recommendations_raw(category: str = "vintage"):
     finding = check_sql_sink(query, sink_signature="recommendation_svc.sqlite3.execute")
     if finding:
         agent.event_buffer.append(finding)
+        if agent.protection_mode == "BLOCK":
+            raise AegisSecurityBlockException(
+                "Blocked SQL Injection execution attempt before database query execution.",
+                rule_key="sql-injection",
+                sink_signature="recommendation_svc.sqlite3.execute",
+            )
 
     try:
         cursor.execute(query)
@@ -113,6 +161,8 @@ async def get_recommendations_raw(category: str = "vintage"):
             "iast_finding_detected": finding is not None,
             "finding": finding,
         }
+    except AegisSecurityBlockException:
+        raise
     except Exception as exc:
         return JSONResponse(
             status_code=500,
@@ -136,6 +186,12 @@ async def get_catalog_asset(asset_name: str = "banner.png"):
     finding = check_path_traversal_sink(tainted_asset, sink_signature="recommendation_svc.open_asset")
     if finding:
         agent.event_buffer.append(finding)
+        if agent.protection_mode == "BLOCK":
+            raise AegisSecurityBlockException(
+                "Blocked Path Traversal attempt targeting system filesystem.",
+                rule_key="path-traversal",
+                sink_signature="recommendation_svc.open_asset",
+            )
 
     return {
         "service": "recommendationservice",

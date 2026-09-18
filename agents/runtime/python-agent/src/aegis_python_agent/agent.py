@@ -25,10 +25,12 @@ class AegisAgent:
         agent_id: str,
         organization_id: str,
         gateway_url: str = "http://localhost:8081",
+        protection_mode: str = "MONITOR",
     ) -> None:
         self.agent_id = agent_id
         self.organization_id = organization_id
         self.gateway_url = gateway_url
+        self.protection_mode = protection_mode.upper()
         self.event_buffer: list[dict[str, Any]] = []
         self._running = False
 
@@ -38,16 +40,31 @@ class AegisAgent:
         agent_id: str = "",
         organization_id: str = "",
         gateway_url: str = "http://localhost:8081",
+        protection_mode: str = "MONITOR",
+        auto_instrument: bool = False,
     ) -> AegisAgent:
         """Start and initialize the Aegis Python Agent."""
         agent = cls(
             agent_id=agent_id or str(uuid.uuid4()),
             organization_id=organization_id or str(uuid.uuid4()),
             gateway_url=gateway_url,
+            protection_mode=protection_mode,
         )
         agent._running = True
-        logger.info("Aegis Python IAST Agent initialized [Agent ID: %s]", agent.agent_id)
+        if auto_instrument:
+            from .hooking import hook_all_sinks
+            hook_all_sinks(agent)
+        logger.info(
+            "Aegis Python IAST Agent initialized [Agent ID: %s, Mode: %s]",
+            agent.agent_id,
+            agent.protection_mode,
+        )
         return agent
+
+    def set_protection_mode(self, mode: str) -> None:
+        """Dynamically switch between MONITOR and BLOCK modes."""
+        self.protection_mode = mode.upper()
+        logger.info("Aegis ADR Protection Mode updated to: %s", self.protection_mode)
 
     def wrap_request(self, route: str, method: str, params: dict[str, str]) -> str:
         """WSGI/ASGI middleware entry point: initializes trace and taints incoming query/body params."""

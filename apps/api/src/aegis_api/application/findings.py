@@ -42,6 +42,7 @@ from ..domain.ports import UnitOfWork
 from .audit_recorder import AuditRecorder
 from .context import Principal
 from .dto import Page
+from .stream import findings_broadcaster
 
 #: Rule keys the agent emits, mapped to the CWE a report needs to cite.
 CWE_BY_RULE: dict[str, int] = {
@@ -339,6 +340,21 @@ class ProcessRuntimeEvents:
             result.findings_created += 1
         else:
             result.findings_updated += 1
+
+        findings_broadcaster.publish(
+            organization_id,
+            {
+                "type": "FINDING_CREATED" if created else "FINDING_UPDATED",
+                "finding_id": str(finding.id),
+                "rule_key": finding.rule_key,
+                "severity": finding.severity.value,
+                "confidence": finding.confidence.value,
+                "sink_signature": finding.sink_signature,
+                "application_id": str(context.application_id),
+                "occurrence_count": finding.occurrence_count,
+                "observed_at": observed_at.isoformat(),
+            },
+        )
 
         if await self._should_keep_evidence(uow, finding, observed_at):
             await uow.findings.add_occurrence(

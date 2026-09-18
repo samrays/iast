@@ -223,15 +223,38 @@ def run_online_boutique_iast_tests() -> None:
 
     processes: list[multiprocessing.Process] = []
 
-    # 1. Start all Online Boutique Microservices in separate processes
-    for service_name, port in PORTS.items():
-        p = multiprocessing.Process(target=run_service, args=(service_name, port), daemon=True)
-        p.start()
-        processes.append(p)
-        logger.info("Starting Online Boutique Microservice [%s] on port %d...", service_name, port)
+    # 1. Check if Online Boutique Microservices are already running
+    already_running = True
+    for port in PORTS.values():
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/openapi.json", timeout=0.5) as r:
+                if r.status != 200:
+                    already_running = False
+        except Exception:
+            already_running = False
+            break
 
-    # Wait for microservices readiness
-    wait_for_services()
+    if not already_running:
+        for service_name, port in PORTS.items():
+            p = multiprocessing.Process(target=run_service, args=(service_name, port), daemon=True)
+            p.start()
+            processes.append(p)
+            logger.info("Starting Online Boutique Microservice [%s] on port %d...", service_name, port)
+        wait_for_services()
+    else:
+        logger.info("All Online Boutique microservices are already active on ports 8091-8095. Connecting to live instances...")
+
+    # Ensure fleet is in MONITOR mode for taint detection phase
+    try:
+        req = urllib.request.Request(
+            "http://127.0.0.1:8095/api/protection-mode",
+            data=json.dumps({"mode": "MONITOR"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=1.0)
+    except Exception as exc:
+        logger.warning("Could not set protection mode to MONITOR: %s", exc)
 
     try:
         # 2. Operational / Benign E-Commerce Journeys
@@ -291,20 +314,91 @@ def run_online_boutique_iast_tests() -> None:
             except Exception as exc:
                 print(f"[FAIL] {category} [{service}]: {exc}\n")
 
+        # 3. Active Defense & Response (ADR) Exploit Blocking Tests
         print("----------------------------------------------------------------------")
-        print(" PHASE 3: CONTROL PLANE DATABASE INGEST & DASHBOARD SYNC               ")
+        print(" PHASE 3: ACTIVE DEFENSE & RESPONSE (ADR) BLOCKING VERIFICATION        ")
+        print("----------------------------------------------------------------------")
+        # Toggle fleet to BLOCK mode via frontend orchestrator
+        try:
+            req = urllib.request.Request(
+                "http://127.0.0.1:8095/api/protection-mode",
+                data=json.dumps({"mode": "BLOCK"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=1.0)
+            print("[MODE] Switched fleet protection mode to BLOCK (Active Defense).\n")
+        except Exception as exc:
+            print(f"[WARN] Could not switch to BLOCK mode: {exc}\n")
+
+        # Verify benign traffic is NOT blocked in BLOCK mode
+        for btc in BENIGN_TEST_CASES[:2]:
+            headers = btc.get("headers", {})
+            req = urllib.request.Request(btc["url"], data=btc["payload"], headers=headers, method=btc["method"])
+            with urllib.request.urlopen(req) as resp:
+                assert resp.status == 200
+                print(f"[PASS] Benign traffic allowed in BLOCK mode: {btc['description']}")
+
+        print("")
+        adr_passed = 0
+        for tc in SECURITY_ATTACK_CASES:
+            category = tc["category"]
+            service = tc["service"]
+            url = tc["url"]
+            method = tc["method"]
+            payload = tc["payload"]
+            headers = tc.get("headers", {})
+
+            req = urllib.request.Request(url, data=payload, headers=headers, method=method)
+            try:
+                urllib.request.urlopen(req)
+                print(f"[FAIL] {category} [{service}]: Expected HTTP 403 Forbidden, but request succeeded!\n")
+            except urllib.error.HTTPError as err:
+                if err.code == 403:
+                    body = json.loads(err.read().decode("utf-8"))
+                    rule_key = body.get("rule_key") or body.get("finding", {}).get("rule_key")
+                    detail = body.get("detail", "Security Block")
+                    print(f"[BLOCKED] {category} [{service}]")
+                    print(f"          -> Status    : 403 Forbidden (Blocked by Aegis ADR)")
+                    print(f"          -> Rule Key  : {rule_key}")
+                    print(f"          -> Detail    : {detail}\n")
+                    adr_passed += 1
+                else:
+                    print(f"[FAIL] {category} [{service}]: Unexpected HTTP code {err.code}\n")
+            except Exception as exc:
+                print(f"[FAIL] {category} [{service}]: Unexpected error {exc}\n")
+
+        print(f"ADR Defense Suite: {adr_passed}/{len(SECURITY_ATTACK_CASES)} Exploits Neutralized at Sink!\n")
+
+        # Restore fleet to MONITOR mode
+        try:
+            req = urllib.request.Request(
+                "http://127.0.0.1:8095/api/protection-mode",
+                data=json.dumps({"mode": "MONITOR"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=1.0)
+            print("[MODE] Restored fleet protection mode to MONITOR.\n")
+        except Exception as exc:
+            print(f"[WARN] Could not restore MONITOR mode: {exc}\n")
+
+        print("----------------------------------------------------------------------")
+        print(" PHASE 4: CONTROL PLANE DATABASE INGEST & DASHBOARD SYNC               ")
         print("----------------------------------------------------------------------")
         asyncio.run(seed_findings_main())
 
         print("======================================================================")
         print(f" SUMMARY REPORT:")
         print(f"   - Operational Benign Journeys : {benign_passed}/{len(BENIGN_TEST_CASES)} Passed")
-        print(f"   - Security Vulnerability Sinks : {security_passed}/{len(SECURITY_ATTACK_CASES)} Detected")
-        print(f"   - Control Plane Dashboard Sync : 10/10 Ingested & Dashboard Live")
+        print(f"   - Security Taint Detections   : {security_passed}/{len(SECURITY_ATTACK_CASES)} Detected")
+        print(f"   - Active Defense Intercepts   : {adr_passed}/{len(SECURITY_ATTACK_CASES)} Blocked at Sink")
+        print(f"   - Control Plane Dashboard Sync: 10/10 Ingested & Dashboard Live")
         print("======================================================================")
 
         assert benign_passed == len(BENIGN_TEST_CASES)
         assert security_passed == len(SECURITY_ATTACK_CASES)
+        assert adr_passed == len(SECURITY_ATTACK_CASES)
 
     finally:
         for p in processes:

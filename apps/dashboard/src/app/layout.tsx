@@ -39,10 +39,11 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    // `suppressHydrationWarning` is required by next-themes: it writes the theme class on
-    // the client before hydration to avoid a flash of the wrong theme.
+    // `suppressHydrationWarning` is required by next-themes and browser extensions: it writes
+    // the theme class / attributes on the client before hydration. Both html and body require
+    // suppressHydrationWarning so React does not flag attribute mismatches on hydration.
     <html lang="en" suppressHydrationWarning className={`${sans.variable} ${mono.variable}`}>
-      <body>
+      <body suppressHydrationWarning>
         <Providers>{children}</Providers>
       </body>
     </html>

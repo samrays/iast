@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from ....application.findings import (
     BulkTriageFindings,
@@ -15,6 +17,7 @@ from ....application.findings import (
     ListFindings,
     TriageFinding,
 )
+from ....application.stream import findings_broadcaster
 from ....application.sarif import ExportFindingsAsSarif
 from ....application.siem import ExportFindingsForSiem
 from ....domain.entities.findings import FindingStatus
@@ -137,6 +140,38 @@ async def bulk_triage(
     # 200 with per-finding outcomes rather than 207 or an error: the caller always needs the
     # breakdown, and a status code cannot carry "forty applied, three were already remediated".
     return BulkTriageResponse.of(outcomes)
+
+
+@router.get("/stream", summary="Live finding events SSE stream")
+async def stream_findings(
+    request: Request,
+    principal: PrincipalDep,
+) -> StreamingResponse:
+    queue = findings_broadcaster.subscribe(principal.organization_id)
+
+    async def event_generator():
+        try:
+            yield f"event: connected\ndata: {json.dumps({'status': 'connected', 'organization_id': str(principal.organization_id)})}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield f"event: finding\ndata: {json.dumps(event)}\n\n"
+                except TimeoutError:
+                    yield ": keep-alive\n\n"
+        finally:
+            findings_broadcaster.unsubscribe(principal.organization_id, queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get(

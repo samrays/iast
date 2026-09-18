@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-provider";
 import { Permission } from "@/lib/permissions";
+import { useFindingsStream } from "@/lib/use-findings-stream";
 import { initials, relativeTime } from "@/lib/utils";
 
 import { Badge, agentStatusVariant } from "../ui/badge";
@@ -46,6 +47,9 @@ export function Topbar() {
   const [mounted, setMounted] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const { data: alerts } = useFleetAlerts(can(Permission.AGENT_READ));
+
+  // Subscribe to real-time finding SSE stream
+  useFindingsStream();
 
   // The resolved theme is unknown until the client mounts; rendering an icon before that
   // guarantees a hydration mismatch.

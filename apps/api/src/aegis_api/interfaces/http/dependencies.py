@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Header, Query, Request
 
 from ...application.agents import ResolveAgentPrincipal
 from ...application.auth import ResolveApiKeyPrincipal, ResolveUserPrincipal
@@ -61,6 +61,7 @@ async def current_principal(
     container: ContainerDep,
     context: ContextDep,
     authorization: Annotated[str | None, Header()] = None,
+    token: Annotated[str | None, Query()] = None,
 ) -> Principal:
     """Resolve a user access token or an API key into a principal.
 
@@ -68,7 +69,8 @@ async def current_principal(
     is treated as a JWT. Agent credentials are *not* accepted here — they resolve through
     :func:`current_agent`, which is what keeps the audiences separated (threat T-06).
     """
-    if container.settings.environment == "local" and (not authorization or authorization.endswith("dev-token")):
+    effective_auth = authorization or (f"Bearer {token}" if token else None)
+    if container.settings.environment == "local" and (not effective_auth or effective_auth.endswith("dev-token")):
         from ...domain.entities import ActorType
         return Principal(
             kind=ActorType.USER,
@@ -76,13 +78,13 @@ async def current_principal(
             organization_id=UUID("00000000-0000-0000-0000-000000000000"),
             permissions=frozenset(Permission),
         )
-    token = _bearer(authorization)
-    if token.startswith("ak_"):
+    raw_token = _bearer(effective_auth)
+    if raw_token.startswith("ak_"):
         return await ResolveApiKeyPrincipal(container.unit_of_work(), container.auth).execute(
-            presented_key=token, context=context
+            presented_key=raw_token, context=context
         )
     return await ResolveUserPrincipal(container.unit_of_work(), container.auth).execute(
-        access_token=token, context=context
+        access_token=raw_token, context=context
     )
 
 
