@@ -15,7 +15,8 @@
     "typecheck": "npm run typecheck --workspace @aegis/dashboard",
     "test": "npm run test --workspace @aegis/dashboard",
     "test:e2e": "npm run test:e2e --workspace @aegis/dashboard",
-    "check": "npm run typecheck && npm run lint && npm run test"
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "demo:boutique": "python scripts/start_boutique_demo.py"
   },
   "engines": {
     "node": ">=24"

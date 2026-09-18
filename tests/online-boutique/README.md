@@ -47,9 +47,32 @@ Each microservice is instrumented with Aegis IAST runtime instrumentation to det
 | **Boutique Frontend** | `GET /api/cart/checkout` | Open Redirect | `fastapi.responses.RedirectResponse` | CWE-601 |
 | **Boutique Frontend** | `POST /api/cart/restore` | Unsafe Deserialization | `pickle.loads` | CWE-502 |
 
-## How to Execute the Online Boutique Test Suite
+## How to Start the App and Run on the Vulnerable App
 
-Run the test suite using Python:
+### Option 1: Unified Launcher (Starts All Services & Runs Tests/Traffic)
+To start the entire Aegis IAST platform (Control Plane API, Dashboard, Online Boutique microservices) and run security tests and traffic against the vulnerable app in one command:
+
+```bash
+# Python:
+python start_boutique_demo.py
+
+# Or via npm:
+npm run demo:boutique
+
+# Or in PowerShell:
+.\start_boutique_demo.ps1
+```
+
+Options:
+- `--test-only`: Run the 4-phase vulnerability test suite and exit cleanly.
+- `--interval 0.5`: Adjust simulated traffic interval (default: 1.0s).
+- `--attack-ratio 0.2`: Adjust proportion of attack payloads (default: 0.15).
+- `--count 20`: Run a specific number of simulated transactions.
+- `--mode BLOCK`: Start cluster in Active Defense & Response (ADR) blocking mode.
+
+### Option 2: Execute Test Harness Directly
+If services are already running, execute the automated 4-phase test suite directly:
+
 ```bash
 python tests/online-boutique/test_boutique_harness.py
 ```
