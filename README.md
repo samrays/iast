@@ -79,7 +79,35 @@ tests/          Cross-service integration and end-to-end suites
 | [Roadmap](docs/07-roadmap.md) | Phase gates and exit criteria |
 | [ADRs](docs/adr/) | Architecture decision records |
 
-## Quick start (Phase 2 control plane)
+## Quick Start: Standalone Demo with Google Online Boutique (Zero External Services)
+
+To set up and run the complete platform and vulnerable e-commerce cluster on any machine without Docker:
+
+> Detailed cross-device instructions are in [**SETUP.md**](SETUP.md).
+
+```bash
+# 1. Automated Setup:
+# Windows:
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
+
+# Linux / macOS:
+chmod +x setup.sh && ./setup.sh
+
+# 2. Start all services & execute vulnerability tests:
+python start_boutique_demo.py
+
+# Or via npm:
+npm run demo:boutique
+```
+
+Access Points:
+- **Security Dashboard**: [http://localhost:3100](http://localhost:3100) (`owner@aegis.example` / `Password123!`)
+- **Control Plane API**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- **Online Boutique & ADR Sandbox**: [http://localhost:8095](http://localhost:8095)
+
+---
+
+## Quick start: Production / Docker Backing Services (Phase 2 control plane)
 
 Prerequisites: Python 3.11+ and PostgreSQL 14+ (either your own instance or the Docker stack below).
 

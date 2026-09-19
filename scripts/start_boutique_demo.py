@@ -217,15 +217,29 @@ def main() -> None:
 
     manager = DemoProcessManager()
     atexit.register(manager.terminate_all)
-    signal.signal(signal.SIGINT, lambda s, f: sys.exit(0))
+    # Ensure .env exists
+    env_file = REPO_ROOT / ".env"
+    env_example = REPO_ROOT / ".env.example"
+    if not env_file.exists() and env_example.exists():
+        import shutil
+        shutil.copy(env_example, env_file)
+        print("  [INIT]     Created .env from .env.example")
 
     # 1. Check if Control Plane API is running
     to_wait = []
     if not is_service_ready(SERVICE_ENDPOINTS["Control Plane API"]["url"]):
+        db_path = (REPO_ROOT / "aegis_demo.db").resolve()
+        api_env = {
+            "AEGIS_DATABASE_URL": os.environ.get(
+                "AEGIS_DATABASE_URL",
+                f"sqlite+aiosqlite:///{str(db_path).replace(os.sep, '/')}"
+            ),
+        }
         manager.start_process(
             [VENV_PYTHON, "-m", "uvicorn", "aegis_api.main:app", "--host", "127.0.0.1", "--port", "8000"],
             cwd=REPO_ROOT / "apps" / "api",
             name="Control Plane API (:8000)",
+            env=api_env,
         )
         to_wait.append("Control Plane API")
     else:
