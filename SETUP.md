@@ -191,6 +191,20 @@ python scripts/check_layering.py
 
 ## 7. Troubleshooting
 
+- **macOS: `Failed building wheel for cryptography`**:
+  - **Cause**: Occurs when running Python 3.13 (or when using Conda's base environment), which forces `pip` to compile `cryptography` from source via Rust (`cargo`) and OpenSSL without the required system headers.
+  - **Recommended Fix**:
+    1. Deactivate conda if active: `conda deactivate`
+    2. Install Python 3.12 via Homebrew: `brew install python@3.12`
+    3. Remove the broken virtual environment: `rm -rf apps/api/.venv`
+    4. Re-run setup: `./setup.sh`
+  - **Alternative (Compiling with Rust/OpenSSL)**:
+    If building from source is required on macOS, install OpenSSL & Rust via Homebrew:
+    ```bash
+    brew install openssl@3 pkg-config rust
+    export OPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+    export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig"
+    ```
 - **Port Conflicts (`WinError 10048` or `EADDRINUSE`)**:
   - Ports used: `8000` (API), `3100` (Dashboard), `8091-8095` (Boutique microservices).
   - Stop any existing services or check with `netstat -ano | findstr :8000`.

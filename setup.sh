@@ -16,7 +16,7 @@ echo ""
 # 1. Check Python
 echo "[1/5] Checking Python installation..."
 PYTHON_BIN=""
-for cmd in python3 python; do
+for cmd in python3.12 python3.11 python3 python; do
     if command -v "$cmd" >/dev/null 2>&1; then
         PYTHON_BIN="$cmd"
         break
@@ -25,7 +25,7 @@ done
 
 if [ -z "$PYTHON_BIN" ]; then
     echo "  [ERROR] Python 3 is not installed or not in PATH."
-    echo "  Please install Python 3.11 or higher."
+    echo "  Please install Python 3.11 or 3.12 (recommended)."
     exit 1
 fi
 echo "  -> Found Python: $($PYTHON_BIN --version)"
@@ -43,10 +43,10 @@ fi
 echo "[3/5] Setting up Python virtual environment..."
 VENV_DIR="apps/api/.venv"
 if [ ! -f "$VENV_DIR/bin/python" ]; then
-    echo "  -> Creating virtual environment at $VENV_DIR..."
+    echo "  -> Creating virtual environment at $VENV_DIR using $PYTHON_BIN..."
     "$PYTHON_BIN" -m venv "$VENV_DIR"
 else
-    echo "  -> Virtual environment already exists at $VENV_DIR"
+    echo "  -> Virtual environment already exists at $VENV_DIR ($($VENV_DIR/bin/python --version 2>/dev/null || echo 'unknown'))"
 fi
 
 VENV_PY="$VENV_DIR/bin/python"

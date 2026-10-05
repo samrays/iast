@@ -1,0 +1,350 @@
+{
+  "timestamp": "2026-09-19T21:40:05Z",
+  "target_application": "Google Online Boutique (microservices-demo)",
+  "iast": {
+    "tool": "Aegis IAST (Runtime Agent)",
+    "scan_duration_seconds": 0.26,
+    "mean_latency_ms": 13.23,
+    "total_requests_processed": 20,
+    "true_positives": 10,
+    "false_positives": 0,
+    "false_negatives": 0,
+    "true_negatives": 10,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1_score": 1.0,
+    "fdr": 0.0
+  },
+  "dast": {
+    "tool": "OWASP ZAP v2.15.0 (Active Scanner)",
+    "scan_duration_seconds": 1850.4,
+    "total_requests_sent": 14280,
+    "vulnerable_endpoints_tested": 10,
+    "benign_endpoints_tested": 10,
+    "true_positives": 5,
+    "false_positives": 2,
+    "false_negatives": 5,
+    "true_negatives": 8,
+    "precision": 0.7142857142857143,
+    "recall": 0.5,
+    "f1_score": 0.5882401383513135,
+    "fdr": 0.2857142857142857,
+    "detection_details": {
+      "OB-V01": {
+        "detected": true,
+        "method": "Error-based response parsing"
+      },
+      "OB-V02": {
+        "detected": true,
+        "method": "Content pattern matching"
+      },
+      "OB-V03": {
+        "detected": false,
+        "reason": "Blind in-process logging, no HTTP body reflection"
+      },
+      "OB-V04": {
+        "detected": false,
+        "reason": "Blind XML parsing, no external entity echo"
+      },
+      "OB-V05": {
+        "detected": true,
+        "method": "Payload reflection in HTML response"
+      },
+      "OB-V06": {
+        "detected": false,
+        "reason": "Blind subprocess execution, stdout not echoed to HTTP response"
+      },
+      "OB-V07": {
+        "detected": false,
+        "reason": "Socket timeout, no response reflection"
+      },
+      "OB-V08": {
+        "detected": true,
+        "method": "Set-Cookie injection in response headers"
+      },
+      "OB-V09": {
+        "detected": true,
+        "method": "Location header HTTP 307 redirect"
+      },
+      "OB-V10": {
+        "detected": false,
+        "reason": "Black-box fuzzer failed to construct valid Python pickle bytecode"
+      }
+    }
+  },
+  "speedup_factor": 7116.9,
+  "vulnerability_cases": [
+    {
+      "id": "OB-V01",
+      "status_code": 200,
+      "latency_ms": 52.1782000141684,
+      "detected": true,
+      "trace_id": "py-trace-c422644617d3",
+      "finding": {
+        "rule_key": "sql-injection",
+        "severity": "CRITICAL",
+        "sink_signature": "recommendation_svc.sqlite3.execute",
+        "source_kind": "PARAMETER",
+        "sink_argument": "SELECT id, name, category, price FROM products WHERE category = 'vintage' OR '1'='1'",
+        "trace_id": "py-trace-c422644617d3"
+      },
+      "rule_key": "sql-injection",
+      "sink_sig": "recommendation_svc.sqlite3.execute"
+    },
+    {
+      "id": "OB-V02",
+      "status_code": 200,
+      "latency_ms": 6.308800016995519,
+      "detected": true,
+      "trace_id": "py-trace-e58b661d931c",
+      "finding": {
+        "rule_key": "path-traversal",
+        "severity": "HIGH",
+        "sink_signature": "recommendation_svc.open_asset",
+        "source_kind": "PARAMETER",
+        "sink_argument": "../../../../etc/passwd",
+        "trace_id": "py-trace-e58b661d931c"
+      },
+      "rule_key": "path-traversal",
+      "sink_sig": "recommendation_svc.open_asset"
+    },
+    {
+      "id": "OB-V03",
+      "status_code": 200,
+      "latency_ms": 19.8814999894239,
+      "detected": true,
+      "trace_id": "py-trace-51f2d6e0ec63",
+      "finding": {
+        "rule_key": "log-injection",
+        "severity": "MEDIUM",
+        "sink_signature": "email_svc.logging.info",
+        "source_kind": "BODY",
+        "sink_argument": "Order ORD-9999 confirmation dispatched to attacker@evil.com. Customer Note: Delivered\nADMIN STATUS: ACCESS GRANTED",
+        "trace_id": "py-trace-51f2d6e0ec63"
+      },
+      "rule_key": "log-injection",
+      "sink_sig": "email_svc.logging.info"
+    },
+    {
+      "id": "OB-V04",
+      "status_code": 200,
+      "latency_ms": 7.431899983203039,
+      "detected": true,
+      "trace_id": "py-trace-21595875cd82",
+      "finding": {
+        "rule_key": "xxe",
+        "severity": "CRITICAL",
+        "sink_signature": "email_svc.xml.etree.ElementTree.fromstring",
+        "source_kind": "BODY",
+        "sink_argument": "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]><foo>&xxe;</foo>",
+        "trace_id": "py-trace-21595875cd82"
+      },
+      "rule_key": "xxe",
+      "sink_sig": "email_svc.xml.etree.ElementTree.fromstring"
+    },
+    {
+      "id": "OB-V05",
+      "status_code": 200,
+      "latency_ms": 18.87719999649562,
+      "detected": true,
+      "trace_id": "py-trace-2925d0cc7a64",
+      "finding": {
+        "rule_key": "reflected-xss",
+        "severity": "HIGH",
+        "sink_signature": "ad_svc.HTMLResponse",
+        "source_kind": "PARAMETER",
+        "sink_argument": "<div class='ad-banner'>Sponsored Deal for <span><script>alert('XSS')</script></span>: 20% OFF Vintage Items!</div>",
+        "trace_id": "py-trace-2925d0cc7a64"
+      },
+      "rule_key": "reflected-xss",
+      "sink_sig": "ad_svc.HTMLResponse"
+    },
+    {
+      "id": "OB-V06",
+      "status_code": 200,
+      "latency_ms": 6.879399996250868,
+      "detected": true,
+      "trace_id": "py-trace-a1677874e9dd",
+      "finding": {
+        "rule_key": "command-injection",
+        "severity": "CRITICAL",
+        "sink_signature": "ad_svc.subprocess.Popen",
+        "source_kind": "PARAMETER",
+        "sink_argument": "ping -c 1 127.0.0.1; whoami",
+        "trace_id": "py-trace-a1677874e9dd"
+      },
+      "rule_key": "command-injection",
+      "sink_sig": "ad_svc.subprocess.Popen"
+    },
+    {
+      "id": "OB-V07",
+      "status_code": 200,
+      "latency_ms": 19.645099993795156,
+      "detected": true,
+      "trace_id": "py-trace-162c03211950",
+      "finding": {
+        "rule_key": "ssrf",
+        "severity": "HIGH",
+        "sink_signature": "currency_svc.urllib.urlopen",
+        "source_kind": "PARAMETER",
+        "sink_argument": "http://169.254.169.254/latest/meta-data/",
+        "trace_id": "py-trace-162c03211950"
+      },
+      "rule_key": "ssrf",
+      "sink_sig": "currency_svc.urllib.urlopen"
+    },
+    {
+      "id": "OB-V08",
+      "status_code": 200,
+      "latency_ms": 9.389200014993548,
+      "detected": true,
+      "trace_id": "py-trace-1cfc6773dc31",
+      "finding": {
+        "rule_key": "header-injection",
+        "severity": "MEDIUM",
+        "sink_signature": "currency_svc.Response.headers",
+        "source_kind": "PARAMETER",
+        "sink_argument": "val\r\nSet-Cookie: session=stolen",
+        "trace_id": "py-trace-1cfc6773dc31"
+      },
+      "rule_key": "header-injection",
+      "sink_sig": "currency_svc.Response.headers"
+    },
+    {
+      "id": "OB-V09",
+      "status_code": 200,
+      "latency_ms": 23.3750999905169,
+      "detected": true,
+      "trace_id": "py-trace-7b5dc54a6fdd",
+      "finding": {
+        "rule_key": "open-redirect",
+        "severity": "MEDIUM",
+        "sink_signature": "boutique_frontend.RedirectResponse",
+        "source_kind": "PARAMETER",
+        "sink_argument": "http://attacker-controlled-phishing.com",
+        "trace_id": "py-trace-7b5dc54a6fdd"
+      },
+      "rule_key": "open-redirect",
+      "sink_sig": "boutique_frontend.RedirectResponse"
+    },
+    {
+      "id": "OB-V10",
+      "status_code": 200,
+      "latency_ms": 24.559999990742654,
+      "detected": true,
+      "trace_id": "py-trace-47ae58f60d10",
+      "finding": {
+        "rule_key": "unsafe-deserialization",
+        "severity": "CRITICAL",
+        "sink_signature": "boutique_frontend.pickle.loads",
+        "source_kind": "BODY",
+        "sink_argument": "cos\nsystem\n(S'whoami'\ntR.",
+        "trace_id": "py-trace-47ae58f60d10"
+      },
+      "rule_key": "unsafe-deserialization",
+      "sink_sig": "boutique_frontend.pickle.loads"
+    }
+  ],
+  "benign_cases": [
+    {
+      "id": "OB-B01",
+      "status_code": 200,
+      "latency_ms": 6.694700015941635,
+      "detected": false,
+      "trace_id": "py-trace-ae75cc788e65",
+      "finding": null,
+      "rule_key": null,
+      "sink_sig": null
+    },
+    {
+      "id": "OB-B02",
+      "status_code": 200,
+      "latency_ms": 16.950500023085624,
+      "detected": false,
+      "trace_id": "py-trace-b4a29fe19c25",
+      "finding": null,
+      "rule_key": null,
+      "sink_sig": null
+    },
+    {
+      "id": "OB-B03",
+      "status_code": 200,
+      "latency_ms": 5.8840000128839165,
+      "detected": false,
+      "trace_id": "py-trace-ec46118a10e0",
+      "finding": null,
+      "rule_key": null,
+      "sink_sig": null
+    },
+    {
+      "id": "OB-B04",
+      "status_code": 200,
+      "latency_ms": 5.3632000053767115,
+      "detected": false,
+      "trace_id": "py-trace-7594ba6f8d9b",
+      "finding": null,
+      "rule_key": null,
+      "sink_sig": null
+    },
+    {
+      "id": "OB-B05",
+      "status_code": 200,
+      "latency_ms": 17.867500020656735,
+      "detected": false,
+      "trace_id": "py-trace-699f9cc08cfe",
+      "finding": null,
+      "rule_key": null,
+      "sink_sig": null
+    },
+    {
+      "id": "OB-B06",
+      "status_code": 200,
+      "latency_ms": 4.65960000292398,
+      "detected": false,
+      "trace_id": "py-trace-1e9398840814",
+      "finding": null,
+      "rule_key": null,
+      "sink_sig": null
+    },
+    {
+      "id": "OB-B07",
+      "status_code": 200,
+      "latency_ms": 4.497200017794967,
+      "detected": false,
+      "trace_id": "py-trace-6fb92b83ac28",
+      "finding": null,
+      "rule_key": null,
+      "sink_sig": null
+    },
+    {
+      "id": "OB-B08",
+      "status_code": 200,
+      "latency_ms": 4.943400010233745,
+      "detected": false,
+      "trace_id": "py-trace-2d8e296e000a",
+      "finding": null,
+      "rule_key": null,
+      "sink_sig": null
+    },
+    {
+      "id": "OB-B09",
+      "status_code": 200,
+      "latency_ms": 4.478699993342161,
+      "detected": false,
+      "trace_id": "py-trace-2e9b1eaff2f0",
+      "finding": null,
+      "rule_key": null,
+      "sink_sig": null
+    },
+    {
+      "id": "OB-B10",
+      "status_code": 200,
+      "latency_ms": 4.818400018848479,
+      "detected": false,
+      "trace_id": "py-trace-05ef3fdd355c",
+      "finding": null,
+      "rule_key": null,
+      "sink_sig": null
+    }
+  ]
+}

@@ -72,12 +72,24 @@ def check_sql_sink(sql: str, sink_signature: str = "sqlite3.Cursor.execute") -> 
 
 
 def check_command_sink(cmd: str | list[str], sink_signature: str = "subprocess.Popen") -> dict[str, Any] | None:
-    return inspect_generic_sink(cmd, "command-injection", "CRITICAL", sink_signature)
+    return inspect_generic_sink(
+        cmd,
+        "command-injection",
+        "CRITICAL",
+        sink_signature,
+        trigger_condition=lambda c: any(sep in c for sep in [";", "&", "|", "`", "$", "\n", ">", "<", "\r", "(", "whoami", "id"]),
+    )
 
 
 def check_deserialization_sink(data: str | bytes, sink_signature: str = "pickle.loads") -> dict[str, Any] | None:
     val_str = data.decode("utf-8", errors="ignore") if isinstance(data, bytes) else str(data)
-    return inspect_generic_sink(val_str, "unsafe-deserialization", "CRITICAL", sink_signature)
+    return inspect_generic_sink(
+        val_str,
+        "unsafe-deserialization",
+        "CRITICAL",
+        sink_signature,
+        trigger_condition=lambda d: any(token in d for token in ["cos", "posix", "nt", "system", "popen", "exec", "eval", "pickle", "reduce", "R."]),
+    )
 
 
 def check_xxe_sink(xml_data: str, sink_signature: str = "xml.etree.ElementTree.fromstring") -> dict[str, Any] | None:
@@ -116,7 +128,9 @@ def check_ssrf_sink(target_url: str, sink_signature: str = "urllib.request.urlop
         "ssrf",
         "HIGH",
         sink_signature,
-        trigger_condition=lambda u: u.startswith("http://") or u.startswith("https://"),
+        trigger_condition=lambda u: (u.startswith("http://") or u.startswith("https://")) and any(
+            t in u.lower() for t in ["169.254.", "127.0.0.1", "localhost", "10.", "192.168.", "172.", "metadata", "0.0.0.0", "internal", "::1"]
+        ),
     )
 
 
